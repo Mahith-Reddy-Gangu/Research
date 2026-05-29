@@ -1,0 +1,144 @@
+# =============================================================================
+# .gitignore for RegNET (M-RegNET + S-RegNET)
+# =============================================================================
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+wheels/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-workspace
+
+# Data files (large — not for git)
+*.npy
+*.npz
+*.nii
+*.nii.gz
+*.h5
+*.hdf5
+*.mat
+*.pkl
+*.pickle
+data/
+datasets/
+raw_data/
+processed_data/
+train.txt
+val.txt
+
+# Model checkpoints & outputs
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+checkpoints/
+saved_models/
+outputs/
+results/
+training_*/
+viz_output/
+*visualisation_scripts/
+
+# Logs & output files
+*.log
+*.out
+otpt.txt
+log.txt
+logs/
+tensorboard/
+wandb/
+mlruns/
+
+# Run outputs / dumps (regenerable — keep out of the tree)
+# NOTE: config.yaml is the source of truth; no .json is tracked, so this is safe.
+*.json
+*.jsonl
+dump/
+
+# Visualization outputs
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.pdf
+figures/
+plots/
+visualizations/
+
+# Temporary files
+*.tmp
+*.bak
+.cache/
+tmp/
+temp/
+
+# OS generated
+.DS_Store
+._*
+Thumbs.db
+desktop.ini
+
+# Secrets & credentials
+.env
+.env.*
+*.pem
+*.key
+secrets.yaml
+config.local.yaml
+credentials.json
+
+# SLURM / HPC
+slurm-*.out
+*.sbatch
+job_logs/
+
+# Profiling & coverage
+*.prof
+*.lprof
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# Claude Code local settings
+.claude/
+.claude.local.md
+CLAUDE.md
+
+# Exceptions
+!requirements.txt
+!environment.yaml
+!setup.py
+!pyproject.toml
+!README.md
+!LICENSE
+!CHANGELOG.md
+
+# Scratch / scratchpad viz (not part of the pipeline)
+scraps/
+*docs/

@@ -1,0 +1,223 @@
+# =============================================================================
+# MRI Registration Configuration
+# =============================================================================
+# Configuration file for MRI-based brain registration with anatomical guidance.
+# Edit this file to customize training, data paths, and model parameters.
+
+# -----------------------------------------------------------------------------
+# Data Paths
+# -----------------------------------------------------------------------------
+data:
+  # Training and validation data lists (text files with paths to subjects)
+  train_txt: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/train.txt"
+  val_txt: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/val.txt"
+  
+  # Template subject (used as reference for registration)
+  template_mri_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans/OASIS_OAS1_0406_MR1/brain.npy"
+  template_seg_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_onehot.npy"
+  
+  # Data directory (for convert_brain_mri.py)
+  main_dir: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans"
+  subjects_txt: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans/subjects.txt"
+  
+  # File naming conventions
+  mri_filename: "brain.npy"
+  seg_filename: "seg4_onehot.npy"
+  input_nifti: "norm.nii.gz"
+
+# -----------------------------------------------------------------------------
+# Output Configuration
+# -----------------------------------------------------------------------------
+output:
+  # Base directory for training outputs (timestamp will be appended)
+  base_dir: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/training_mri_svf_bspline"
+  
+  # Subdirectory names
+  checkpoint_subdir: "checkpoints"
+  log_subdir: "logs"
+  viz_subdir: "viz_output"
+
+# -----------------------------------------------------------------------------
+# Model Architecture
+# -----------------------------------------------------------------------------
+model:
+  # Input/output dimensions
+  target_size: [128, 128, 128]  # (D, H, W) - volume dimensions after resizing
+  num_classes: 5                 # Number of segmentation classes (including background)
+  seg_channels: 5                # Same as num_classes for one-hot encoding
+
+# -----------------------------------------------------------------------------
+# Flow Parameterization (SVF vs displacement)
+# -----------------------------------------------------------------------------
+# SVF: predict velocity v, integrate to phi = exp(v) by N-step scaling-and-squaring.
+# Diffeomorphism is structural conditional on a Lipschitz bound on v (see deep dive §7).
+# In this codebase the bound comes from: (a) soft tanh `v = B·tanh(v_raw/B)` and (b)
+# top-K Jacobian penalty on integrated phi (loss.jacobian).
+flow:
+  parameterization: "displacement"        # "svf" or "displacement"
+  integration_steps: 7           # N in scaling-and-squaring; Lipschitz budget ~2^N
+  velocity_bound: 0.0            # B in B·tanh(v_raw/B); 0 disables. Off under bspline —
+                                 # the B-spline interpolant bounds ‖J_v‖ structurally,
+                                 # the tanh was the thing saturating (run 20260526_183236).
+  velocity_field: "dense"      # "dense" (free-form v) or "bspline" (coarse control
+                                 # points + cubic B-spline interp; fold control by construction).
+  cp_spacing: 4                  # control-point spacing in voxels (bspline only). 4 → 32³ grid
+                                 # from decoder scale d3. Larger = smoother/safer, lower Dice.
+
+# -----------------------------------------------------------------------------
+# Cascade Configuration (Phase 2 multi-stage; Phase 1 hard-asserts num_stages==1)
+# -----------------------------------------------------------------------------
+cascade:
+  num_stages: 1
+
+# -----------------------------------------------------------------------------
+# Affine Pre-alignment
+# -----------------------------------------------------------------------------
+affine:
+  # Enable affine pre-alignment stage before deformable registration
+  # Set to true only after validating an affine-trained checkpoint exists
+  enabled: true
+
+  # Regularization weights (keeps affine close to identity, prevents shearing)
+  regularization_weight: 0.01
+  orthogonality_weight: 0.01
+
+# -----------------------------------------------------------------------------
+# Anatomical Correction Module (ACM)
+# -----------------------------------------------------------------------------
+acm:
+  # When false, decoder features feed flow + lambda heads directly without
+  # re-injecting template_seg at each scale (SAM in the encoder still runs).
+  # Use to ablate ACM. Toggling this changes the parameter set, so a
+  # checkpoint trained with one value cannot be loaded with the other.
+  enabled: true
+
+# -----------------------------------------------------------------------------
+# Training Hyperparameters
+# -----------------------------------------------------------------------------
+training:
+  # Basic training settings
+  batch_size: 1
+  num_epochs: 100
+  num_workers: 0                 # DataLoader workers (0 for debugging)
+  pin_memory: true
+
+  # Optimizer settings (AdamW)
+  learning_rate: 5.0e-5
+  min_learning_rate: 1.0e-6
+  weight_decay: 1.0e-5
+
+  # Learning rate schedule
+  warmup_epochs: 10             # Linear warmup before cosine annealing
+  
+  # Mixed precision training
+  use_amp: false                 # Automatic Mixed Precision
+  
+  # Checkpointing and early stopping
+  save_every: 10                 # Save checkpoint every N epochs
+  patience: 25                   # Early stopping patience (epochs without improvement)
+  
+  # Gradient clipping
+  max_grad_norm: 1.0
+
+# -----------------------------------------------------------------------------
+# Spatial Augmentation (sample MRI + seg only — gives AffineNet signal to learn)
+# -----------------------------------------------------------------------------
+spatial_augmentation:
+  enabled: false                  # Off for the Dice push — every _aug run capped at 0.82–0.85;
+                                  # all ≥0.89 historical runs ran without spatial aug.
+  rotation_deg: 0                 # ± per axis (0 disables)
+  translation_voxels: 2          # ± along each axis (out of 128)
+  scale_range: [0.9, 1.1]         # per-axis anisotropic stretch; 1.1 = 10% larger anatomy along axis. [1.0, 1.0] disables.
+  elastic_control_points: 0       # control-net resolution per dim
+  elastic_magnitude_voxels: 0.0   # peak displacement at control points (0 disables elastic)
+
+# -----------------------------------------------------------------------------
+# Loss Function Weights
+# -----------------------------------------------------------------------------
+loss:
+  # Matches the loss budget of training_mri_acm_affine/20260427_022537 (best Dice 0.9102,
+  # C1=0.85) — the closest historical affine+ACM reference. Differs from the gold
+  # training_mri_acm/20260220_161929 (0.9240) only in having affine_reg/affine_ortho on.
+  # Prior config drifted from this budget on 8 weights at once; reverted in full.
+
+  # MRI intensity losses
+  ncc: 1.0                       # Normalized Cross Correlation (primary MRI matching)
+  mse: 0.0                       # Redundant with NCC; off.
+
+  # Segmentation alignment losses
+  dice: 1.0                      # Dice loss for segmentation overlap
+  focal: 0.1                     # On in gold runs — restored from 0.0.
+  boundary: 0.2                  # Boundary alignment loss (NCC on edge maps); was 0.1.
+
+  # Geometric regularization
+  # Under SVF, smoothness/bending/displacement/lambda_smoothness are applied to
+  # the velocity v (not the integrated phi). Bulk-mean smoothness alone cannot
+  # control fold offenders (postmortem §3.5, deep dive §8); top-K jacobian on
+  # integrated phi is the primary fold-control mechanism (deep dive §9).
+  smoothness: 0.1                # On v in SVF mode. Dropped 1.0→0.1 for the B-spline run:
+                                 # the B-spline already makes v C²-smooth by construction,
+                                 # so a heavy bulk smoothness just fights Dice capacity (run-3 lesson).
+  bending: 0.05                  # On v in SVF mode; was 5e-4 (on phi).
+  jacobian: 0.1                  # Anti-folding on integrated phi. Top-K + linear neg + pre-fold barrier.
+                                 # This is the load-bearing fold control — DO NOT set to 0 (Run-1 mistake).
+  displacement: 0.0005           # Velocity amplitude penalty in SVF mode (pairs with tanh bound).
+
+  # Lambda-based adaptive regularization
+  lambda_smoothness: 0.02        # Applied to v in SVF mode.
+  lambda_prior: 0.005            # Anatomy-coupled prior.
+
+  # Multi-scale consistency
+  multi_scale: 0.0               # Velocity-pyramid consistency. 0 under bspline — there is no
+                                 # multi-scale velocity sum (single coarse control-point head).
+
+# -----------------------------------------------------------------------------
+# Reproducibility
+# -----------------------------------------------------------------------------
+seed: 42                           # Global random seed for torch, numpy, python
+
+# -----------------------------------------------------------------------------
+# Device Configuration
+# -----------------------------------------------------------------------------
+device:
+  # CUDA device (e.g., "cuda:0", "cuda:4", or "cpu")
+  gpu: "cuda:5"
+
+  # cuDNN benchmark speeds up training by auto-selecting fastest kernels
+  cudnn_benchmark: true
+
+# -----------------------------------------------------------------------------
+# Visualization Settings
+# -----------------------------------------------------------------------------
+visualization:
+  # Number of samples to visualize
+  num_samples: 30                # Total samples (-1 for all)
+  detailed_samples: 10           # Samples with full visualization
+  
+  # Random seed for reproducible sampling
+  seed: 42
+  
+  # Class names for OASIS brain segmentation
+  class_names:
+    - "Background"
+    - "Cortex"
+    - "Subcortical GM"
+    - "White Matter"
+    - "CSF"
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+logging:
+  # Log level (DEBUG, INFO, WARNING, ERROR)
+  level: "INFO"
+  
+  # Log format
+  format: "%(asctime)s | %(levelname)s | %(message)s"
+
+# -----------------------------------------------------------------------------
+# Resume Training
+# -----------------------------------------------------------------------------
+resume:
+  # Path to checkpoint to resume from (null to start fresh)
+  checkpoint_path: null

@@ -1,0 +1,130 @@
+# =============================================================================
+# Seg-only Registration Configuration
+# =============================================================================
+# Configuration file for segmentation-only brain registration. Both inputs
+# are 5-channel one-hot segmentation maps; the model warps template_seg
+# toward sample_seg. Edit this file to customize paths, hyperparameters,
+# and loss weights.
+
+# -----------------------------------------------------------------------------
+# Data Paths
+# -----------------------------------------------------------------------------
+data:
+  # Training and validation data lists (text files; one path per line, each
+  # pointing at the seg .npy of one subject — the dataset loader infers the
+  # subject directory from the file path).
+  train_txt: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/train.txt"
+  val_txt:   "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/val.txt"
+
+  # Template subject seg (used as moving image for every registration).
+  template_seg_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_onehot.npy"
+
+  # File naming inside each subject directory.
+  seg_filename: "seg4_onehot.npy"
+
+# -----------------------------------------------------------------------------
+# Output Configuration
+# -----------------------------------------------------------------------------
+output:
+  base_dir: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/training_seg_acm"
+  checkpoint_subdir: "checkpoints"
+  log_subdir: "logs"
+  viz_subdir: "viz_output"
+
+# -----------------------------------------------------------------------------
+# Model Architecture
+# -----------------------------------------------------------------------------
+model:
+  target_size: [128, 128, 128]   # (D, H, W) — volume dims after resize
+  num_classes: 5                 # incl. background (channel 0)
+  seg_channels: 5
+
+# -----------------------------------------------------------------------------
+# Affine Pre-alignment
+# -----------------------------------------------------------------------------
+affine:
+  enabled: false
+  regularization_weight: 0.01
+  orthogonality_weight: 0.0
+
+# -----------------------------------------------------------------------------
+# Training Hyperparameters
+# -----------------------------------------------------------------------------
+training:
+  batch_size: 1
+  num_epochs: 150
+  num_workers: 0
+  pin_memory: true
+
+  learning_rate: 5.0e-5
+  min_learning_rate: 1.0e-6
+  weight_decay: 1.0e-5
+
+  warmup_epochs: 15
+
+  use_amp: false
+
+  save_every: 10
+  patience: 25
+  max_grad_norm: 1.0
+
+# -----------------------------------------------------------------------------
+# Loss Function Weights
+# -----------------------------------------------------------------------------
+# Jacobian weight is 0.5 (not the original 0.01) because the loss uses the
+# normalised top-K + pre-fold formulation, which has a different output
+# scale than the old mean(ReLU(-det)).
+#
+# Plain first-order smoothness is intentionally absent — lambda_smoothness
+# is the active first-order smoothness regularizer here.
+loss:
+  # Segmentation alignment
+  dice:          0.8
+  cross_entropy: 0.2
+
+  # Geometric regularization
+  bending:       0.1           # second-order smoothness
+  jacobian:      0.5           # anti-folding; linear-neg + top-K + pre-fold barrier
+  displacement:  0.01          # penalises large per-voxel displacements
+
+  # Lambda-based adaptive regularization
+  #   smoothness: mean( λ_avg · |∇φ|² )            [linear in λ]
+  #   prior:      mean( (λ - target)² / (2σ²) )    with target = 1 - dilated_boundary(sample_seg), σ=0.3
+  lambda_smoothness: 0.1
+  lambda_prior:      0.05
+
+  # Affine regularization (only active when affine.enabled: true)
+  affine_reg:    0.01
+  affine_ortho:  0.0
+
+# -----------------------------------------------------------------------------
+# Reproducibility
+# -----------------------------------------------------------------------------
+seed: 42
+
+# -----------------------------------------------------------------------------
+# Device Configuration
+# -----------------------------------------------------------------------------
+device:
+  gpu: "cuda:5"
+  cudnn_benchmark: true
+
+# -----------------------------------------------------------------------------
+# Visualization Settings (used by inference / run_inference_all)
+# -----------------------------------------------------------------------------
+visualization:
+  num_samples: 30
+  detailed_samples: 10
+  seed: 42
+  class_names:
+    - "Background"
+    - "Cortex"
+    - "Subcortical GM"
+    - "White Matter"
+    - "CSF"
+
+# -----------------------------------------------------------------------------
+# Resume Training
+# -----------------------------------------------------------------------------
+resume:
+  checkpoint_path: null
