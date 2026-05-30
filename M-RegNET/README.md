@@ -3,8 +3,7 @@
 Deformable brain MRI registration using anatomical segmentation guidance. The model aligns brain MRI scans while respecting tissue boundaries through an Anatomical Correction Module (ACM).
 
 **Performance**: honest displacement baseline is **Dice 0.84 at 0.22% folding**. Earlier
-~0.89–0.92 numbers predate the `jacobian_det_loss` rewrite and under-counted folding — see
-`docs/handoff.md` for the current ceiling and the paths forward.
+~0.89–0.92 numbers predate the `jacobian_det_loss` rewrite and under-counted folding.
 
 ## Project Structure
 
@@ -19,9 +18,7 @@ M-RegNET/
 ├── inference.py         # Single-sample inference (metrics + visualizations)
 ├── run_inference_all.py # Batch inference over a subject range
 ├── compute_self_intersection.py  # Folding / Jacobian diagnostic
-├── visualisation_scripts/        # Analysis-only QA tools
-├── docs/                # handoff.md (start here), architecture & methodology notes
-├── requirements.txt
+├── git_provenance.py    # Stamps each run dir with the git commit
 └── README.md
 ```
 
@@ -29,8 +26,10 @@ M-RegNET/
 
 ### 1. Install Dependencies
 
+Install PyTorch plus the scientific stack used across the scripts:
+
 ```bash
-pip install -r requirements.txt
+pip install torch numpy nibabel scipy scikit-image matplotlib monai tqdm pyyaml
 ```
 
 ### 2. Prepare Data Directory
@@ -109,4 +108,7 @@ output_dir/YYYYMMDD_HHMMSS/
 | `get_data_mri.py` | PyTorch Dataset class. Loads template MRI/segmentation and sample MRI/segmentation pairs. Handles resizing to target dimensions and optional spatial augmentation of the sample (rotation/translation/scale/elastic). |
 | `model_mri.py` | Neural network architecture. Implements dual-stream encoder (MRI + segmentation), Segmentation Attention Module (SAM), Anatomical Correction Module (ACM), and multi-scale decoder with progressive flow refinement. Also contains the Spatial Transformer for warping volumes. |
 | `losses_mri.py` | Loss functions. Includes NCC (intensity matching), Dice (segmentation overlap), boundary alignment, smoothness regularization, bending energy, Jacobian determinant (prevents folding), and lambda-based adaptive regularization. |
-| `requirements.txt` | Python dependencies for the project. |
+| `inference.py` | Single-sample inference: warps a sample to the template, computes metrics, and writes visualizations. |
+| `run_inference_all.py` | Batch inference over a range of subjects. |
+| `compute_self_intersection.py` | Folding / Jacobian determinant diagnostic for a trained checkpoint. |
+| `git_provenance.py` | Stamps each run directory with the current git commit (flags a dirty tree). |

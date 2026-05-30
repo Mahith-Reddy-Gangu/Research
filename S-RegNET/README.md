@@ -18,9 +18,8 @@ We use the [Neurite-OASIS](https://github.com/adalca/medical-datasets/blob/maste
 **Setup**
 
 ```bash
-git clone https://github.com/karthiknm/Segmentation-Map-Registration.git
-cd Segmentation-Map-Registration
-pip install -r requirements.txt  # or install dependencies manually
+# Install PyTorch plus the scientific stack used across the scripts:
+pip install torch numpy nibabel scipy scikit-image matplotlib monai tqdm pyyaml
 ```
 
 ---
@@ -45,6 +44,8 @@ The input to the model is constructed by concatenating the 5-channel template an
 - `losses.py`: Atomic losses (`dice_loss`, `cross_entropy_loss`, `bending_energy_loss`, `jacobian_det_loss`, `displacement_loss`, lambda-adaptive smoothness, affine regularizers) plus the `SegRegistrationLoss` module that combines them.
 - `get_data.py`: Loads `.npy` one-hot maps and resizes them to `(128, 128, 128)` using **nearest-neighbor interpolation**.
 - `convert_one_hot.py`: Converts `.nii.gz` segmentations into 5-channel `.npy` format.
+- `random_deform.py`: Standalone script that applies random elastic deformations to a segmentation and visualizes the result (sanity-check / demo, run manually).
+- `git_provenance.py`: Stamps each run directory with the current git commit (flags a dirty tree).
 - `inference.py` / `compute_self_intersection.py` / `compare_synthseg_vs_gt.py`: standalone evaluation and diagnostic tools (run manually).
 
 ---
