@@ -13,11 +13,11 @@ data:
   # Training and validation data lists (text files; one path per line, each
   # pointing at the seg .npy of one subject — the dataset loader infers the
   # subject directory from the file path).
-  train_txt: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/train.txt"
-  val_txt:   "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/val.txt"
+  train_txt: "/shared/home/v_mahith_reddy/RegNET/S-RegNET/train.txt"
+  val_txt:   "/shared/home/v_mahith_reddy/RegNET/S-RegNET/val.txt"
 
   # Template subject seg (used as moving image for every registration).
-  template_seg_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_onehot.npy"
+  template_seg_path: "/shared/scratch/0/home/v_mahith_reddy/oasis_complete/OASIS_OAS1_0406_MR1/seg4_onehot.npy"
 
   # File naming inside each subject directory.
   seg_filename: "seg4_onehot.npy"
@@ -26,7 +26,7 @@ data:
 # Output Configuration
 # -----------------------------------------------------------------------------
 output:
-  base_dir: "/shared/scratch/0/home/v_mahith_reddy/regnet_training"
+  base_dir: "/shared/scratch/0/home/v_mahith_reddy/regnet_training_exp4"
   checkpoint_subdir: "checkpoints"
   log_subdir: "logs"
   viz_subdir: "viz_output"
