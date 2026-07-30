@@ -52,7 +52,7 @@ affine:
 # -----------------------------------------------------------------------------
 training:
   batch_size: 1
-  num_epochs: 150
+  num_epochs: 60
   num_workers: 0
   pin_memory: true
 
@@ -92,6 +92,9 @@ loss:
   #   prior:      mean( (λ - target)² / (2σ²) )    with target = 1 - dilated_boundary(sample_seg), σ=0.3
   lambda_smoothness: 0.1
   lambda_prior:      0.05
+
+  # Cycle consistency
+  cycle:         0.5
 
   # Affine regularization (only active when affine.enabled: true)
   affine_reg:    0.01

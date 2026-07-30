@@ -96,7 +96,7 @@ class UNet(nn.Module):
       - lambda head (Conv3d → Sigmoid → 1 channel) producing a per-voxel
         adaptive-smoothness weight in [0, 1].
     """
-    def __init__(self, in_channels=10, out_channels=3):
+    def __init__(self, in_channels=10, out_channels=6):
         super().__init__()
 
         # Encoder
@@ -182,7 +182,8 @@ class SegRegistrationNet(nn.Module):
         - sample_seg:   (B, 5, D, H, W) one-hot
 
     Output:
-        - final_flow:    (B, 3, D, H, W) deformation field
+        - flow_fw:       (B, 3, D, H, W) forward deformation field
+        - flow_rv:       (B, 3, D, H, W) reverse deformation field
                          (in affine-aligned space when use_affine=True)
         - lambda_map:    (B, 1, D, H, W) per-voxel adaptive-smoothness
                          weight (Sigmoid output, λ ∈ [0, 1])
@@ -194,7 +195,7 @@ class SegRegistrationNet(nn.Module):
         if use_affine:
             self.affine_net = AffineNet(in_channels=2 * seg_channels)
 
-        self.unet = UNet(in_channels=2 * seg_channels, out_channels=3)
+        self.unet = UNet(in_channels=2 * seg_channels, out_channels=6)
 
     def forward(self, template_seg, sample_seg):
         affine_matrix = None
@@ -208,8 +209,10 @@ class SegRegistrationNet(nn.Module):
             )
 
         x = torch.cat([template_seg, sample_seg], dim=1)
-        final_flow, lambda_map = self.unet(x)
-        return final_flow, lambda_map, affine_matrix
+        flow, lambda_map = self.unet(x)
+        flow_fw = flow[:, :3, ...]
+        flow_rv = flow[:, 3:, ...]
+        return flow_fw, flow_rv, lambda_map, affine_matrix
 
 
 # =============================================================================
