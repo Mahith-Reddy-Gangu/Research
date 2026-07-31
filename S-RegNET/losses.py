@@ -271,6 +271,17 @@ def affine_orthogonality_loss(affine_matrix):
 
 
 # =============================================================================
+# Cycle Consistency
+# =============================================================================
+
+def cycle_consistency_loss(flow_fw, flow_rv, stn):
+    """Cycle consistency between forward and reverse flows."""
+    fw_rv = flow_fw + stn(flow_rv, flow_fw)
+    rv_fw = flow_rv + stn(flow_fw, flow_rv)
+    return torch.mean(fw_rv ** 2) + torch.mean(rv_fw ** 2)
+
+
+# =============================================================================
 # Comprehensive Loss Class
 # =============================================================================
 
@@ -279,9 +290,10 @@ class SegRegistrationLoss(nn.Module):
     Composite loss for seg-only registration.
 
     Terms (all summed with weights from `weights`):
-      - dice, cross_entropy
-      - bending, jacobian, displacement
+      - dice, cross_entropy (symmetric)
+      - bending, jacobian, displacement (symmetric)
       - lambda_smoothness, lambda_prior
+      - cycle
       - affine_reg, affine_ortho  (active only when affine_matrix is not None)
 
     `weights` is required — config.yaml is the single source of truth. Any
@@ -297,30 +309,34 @@ class SegRegistrationLoss(nn.Module):
             )
         self.weights = weights
 
-    def forward(self, warped_seg, sample_seg, final_flow, lambda_map,
+    def forward(self, warped_seg_fw, sample_seg, warped_seg_rv, template_seg,
+                flow_fw, flow_rv, lambda_map, stn,
                 affine_matrix=None, return_components=False):
         loss_dict = {}
 
-        # Segmentation alignment
-        loss_dict['dice'] = dice_loss(warped_seg, sample_seg)
-        loss_dict['cross_entropy'] = cross_entropy_loss(warped_seg, sample_seg)
+        # Segmentation alignment (symmetric)
+        loss_dict['dice'] = dice_loss(warped_seg_fw, sample_seg) + dice_loss(warped_seg_rv, template_seg)
+        loss_dict['cross_entropy'] = cross_entropy_loss(warped_seg_fw, sample_seg) + cross_entropy_loss(warped_seg_rv, template_seg)
 
-        # Geometric regularization
-        loss_dict['bending'] = bending_energy_loss(final_flow)
-        loss_dict['jacobian'] = jacobian_det_loss(final_flow)
-        loss_dict['displacement'] = displacement_loss(final_flow)
+        # Geometric regularization (symmetric)
+        loss_dict['bending'] = bending_energy_loss(flow_fw) + bending_energy_loss(flow_rv)
+        loss_dict['jacobian'] = jacobian_det_loss(flow_fw) + jacobian_det_loss(flow_rv)
+        loss_dict['displacement'] = displacement_loss(flow_fw) + displacement_loss(flow_rv)
 
-        # Lambda-adaptive (linear-λ smoothness + anatomy prior)
-        loss_dict['lambda_smoothness'] = lambda_weighted_smoothness(final_flow, lambda_map)
+        # Lambda-adaptive (linear-λ smoothness applied to both + anatomy prior)
+        loss_dict['lambda_smoothness'] = lambda_weighted_smoothness(flow_fw, lambda_map) + lambda_weighted_smoothness(flow_rv, lambda_map)
         loss_dict['lambda_prior'] = lambda_prior_loss(lambda_map, sample_seg)
+
+        # Cycle consistency
+        loss_dict['cycle'] = cycle_consistency_loss(flow_fw, flow_rv, stn)
 
         # Affine
         if affine_matrix is not None:
             loss_dict['affine_reg'] = affine_regularization_loss(affine_matrix)
             loss_dict['affine_ortho'] = affine_orthogonality_loss(affine_matrix)
         else:
-            loss_dict['affine_reg'] = torch.tensor(0.0, device=final_flow.device)
-            loss_dict['affine_ortho'] = torch.tensor(0.0, device=final_flow.device)
+            loss_dict['affine_reg'] = torch.tensor(0.0, device=flow_fw.device)
+            loss_dict['affine_ortho'] = torch.tensor(0.0, device=flow_fw.device)
 
         total_loss = sum(self.weights.get(k, 0.0) * loss_dict[k] for k in loss_dict)
 

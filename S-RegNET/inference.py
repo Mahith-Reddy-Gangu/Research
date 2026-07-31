@@ -352,7 +352,7 @@ def setup_inference(checkpoint_path, config_path=None, device='cuda:0',
 
     if verbose:
         print("Loading model...")
-    model = SegRegistrationNet(seg_channels=num_classes, use_affine=use_affine).to(dev)
+    model = SegRegistrationNet(target_size=target_size, seg_channels=num_classes, use_affine=use_affine).to(dev)
     stn = SpatialTransformer(size=target_size, device=dev).to(dev)
 
     ckpt = torch.load(checkpoint_path, map_location=dev, weights_only=False)
@@ -397,17 +397,17 @@ def run_inference_on_sample(ctx, input_seg_path, output_dir,
     sample_seg = sample_seg.unsqueeze(0).to(device)
 
     # Forward + affine-then-flow warp replay (critical invariant; matches train.py:_warp_template)
-    final_flow, lambda_map, affine_matrix = model(template_seg, sample_seg)
+    flow_fw, flow_rv, lambda_map, affine_matrix = model(template_seg, sample_seg)
     if affine_matrix is not None:
         affine_grid = F.affine_grid(affine_matrix, template_seg.size(), align_corners=False)
         aligned_seg = F.grid_sample(template_seg, affine_grid, mode='bilinear',
                                     padding_mode='zeros', align_corners=False)
-        warped_seg = stn(aligned_seg, final_flow)
+        warped_seg = stn(aligned_seg, flow_fw)
     else:
-        warped_seg = stn(template_seg, final_flow)
+        warped_seg = stn(template_seg, flow_fw)
 
     losses = compute_all_losses(
-        warped_seg, sample_seg, final_flow,
+        warped_seg, sample_seg, flow_fw,
         lambda_map, affine_matrix, num_classes=num_classes,
     )
 
@@ -427,7 +427,7 @@ def run_inference_on_sample(ctx, input_seg_path, output_dir,
 
     plot_comparison(template_seg, sample_seg, warped_seg,
                     output_dir / 'comparison.png')
-    plot_deformation_field(final_flow.squeeze(0).cpu().numpy(),
+    plot_deformation_field(flow_fw.squeeze(0).cpu().numpy(),
                            output_dir / 'deformation_field.png')
     save_warped_nifti(warped_seg, nifti_affine,
                       str(output_dir / 'warped_seg.nii.gz'))

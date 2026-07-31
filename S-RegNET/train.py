@@ -300,12 +300,13 @@ def train_epoch(model, stn, dataloader, loss_fn, optimizer, scaler, device, epoc
         optimizer.zero_grad()
 
         with torch.cuda.amp.autocast(enabled=config.use_amp):
-            final_flow, lambda_map, affine_matrix = model(template_seg, sample_seg)
-            warped_seg = _warp_template(template_seg, final_flow, affine_matrix, stn)
+            flow_fw, flow_rv, lambda_map, affine_matrix = model(template_seg, sample_seg)
+            warped_seg_fw = _warp_template(template_seg, flow_fw, affine_matrix, stn)
+            warped_seg_rv = stn(sample_seg, flow_rv)
 
             loss, loss_dict = loss_fn(
-                warped_seg, sample_seg,
-                final_flow, lambda_map,
+                warped_seg_fw, sample_seg, warped_seg_rv, template_seg,
+                flow_fw, flow_rv, lambda_map, stn,
                 affine_matrix=affine_matrix, return_components=True,
             )
 
@@ -362,33 +363,33 @@ def validate_epoch(model, stn, dataloader, loss_fn, device, epoch, config):
         template_seg = batch['template_seg'].to(device)
         sample_seg = batch['sample_seg'].to(device)
 
-        final_flow, lambda_map, affine_matrix = model(template_seg, sample_seg)
+        flow_fw, flow_rv, lambda_map, affine_matrix = model(template_seg, sample_seg)
 
-        # Diffeomorphism diagnostics. Tracks integer fold count and which
-        # subject produced the worst det — `folding_pct` rounded to 0.000%
-        # hides whether ~10 voxels at det=-0.9 (real but localised) vs
-        # ~5 voxels at det=-30 (catastrophic) is happening.
-        det = jacobian_det(final_flow) / det_ref
-        total_folding_pct += (det < 0).float().mean().item() * 100.0
-        batch_min_det = det.min().item()
-        total_fold_voxels += int((det < 0).sum().item())
+        # Diffeomorphism diagnostics.
+        det_fw = jacobian_det(flow_fw) / det_ref
+        det_rv = jacobian_det(flow_rv) / det_ref
+        total_folding_pct += 0.5 * ((det_fw < 0).float().mean().item() + (det_rv < 0).float().mean().item()) * 100.0
+        batch_min_det = min(det_fw.min().item(), det_rv.min().item())
+        total_fold_voxels += int((det_fw < 0).sum().item()) + int((det_rv < 0).sum().item())
         if batch_min_det < worst_min_det:
             worst_min_det = batch_min_det
             worst_min_det_subject = batch_idx
 
-        warped_seg = _warp_template(template_seg, final_flow, affine_matrix, stn)
+        warped_seg_fw = _warp_template(template_seg, flow_fw, affine_matrix, stn)
+        warped_seg_rv = stn(sample_seg, flow_rv)
 
         loss, loss_dict = loss_fn(
-            warped_seg, sample_seg,
-            final_flow, lambda_map,
+            warped_seg_fw, sample_seg, warped_seg_rv, template_seg,
+            flow_fw, flow_rv, lambda_map, stn,
             affine_matrix=affine_matrix, return_components=True,
         )
 
         total_loss += loss.item()
-        dice_score = 1 - loss_dict['dice'].item()
+        # Since dice is symmetric, we can average them for reporting, or just use loss_dict['dice']/2.
+        dice_score = 1 - (loss_dict['dice'].item() / 2.0)
         total_dice += dice_score
 
-        dice_per_class, _ = compute_dice_score(warped_seg, sample_seg, config.num_classes)
+        dice_per_class, _ = compute_dice_score(warped_seg_fw, sample_seg, config.num_classes)
         for c in range(config.num_classes):
             all_dice_per_class[c].append(dice_per_class[c])
 
@@ -487,6 +488,7 @@ def main():
     logger.info("Initializing model...")
 
     model = SegRegistrationNet(
+        target_size=config.target_size,
         seg_channels=config.seg_channels, use_affine=config.use_affine,
     ).to(device)
     stn = SpatialTransformer(size=config.target_size, device=device).to(device)
