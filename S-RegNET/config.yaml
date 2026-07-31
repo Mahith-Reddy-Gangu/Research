@@ -52,11 +52,11 @@ affine:
 # -----------------------------------------------------------------------------
 training:
   batch_size: 1
-  num_epochs: 150
+  num_epochs: 200
   num_workers: 0
   pin_memory: true
 
-  learning_rate: 5.0e-5
+  learning_rate: 1.0e-4
   min_learning_rate: 1.0e-6
   weight_decay: 1.0e-5
 
@@ -65,7 +65,7 @@ training:
   use_amp: false
 
   save_every: 10
-  patience: 25
+  patience: 50
   max_grad_norm: 1.0
 
 # -----------------------------------------------------------------------------
@@ -83,8 +83,8 @@ loss:
   cross_entropy: 0.2
 
   # Geometric regularization
-  bending:       0.1           # second-order smoothness
-  jacobian:      0.5           # anti-folding; linear-neg + top-K + pre-fold barrier
+  bending:       0.05          # second-order smoothness
+  jacobian:      0.25          # anti-folding; linear-neg + top-K + pre-fold barrier
   displacement:  0.01          # penalises large per-voxel displacements
 
   # Lambda-based adaptive regularization
