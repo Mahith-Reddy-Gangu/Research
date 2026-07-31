@@ -488,6 +488,7 @@ def main():
     logger.info("Initializing model...")
 
     model = SegRegistrationNet(
+        target_size=config.target_size,
         seg_channels=config.seg_channels, use_affine=config.use_affine,
     ).to(device)
     stn = SpatialTransformer(size=config.target_size, device=device).to(device)

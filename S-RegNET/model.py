@@ -170,52 +170,6 @@ class UNet(nn.Module):
 
 
 # =============================================================================
-# Main Model
-# =============================================================================
-
-class SegRegistrationNet(nn.Module):
-    """
-    Seg-only registration network. Optionally includes affine pre-alignment.
-
-    Input:
-        - template_seg: (B, 5, D, H, W) one-hot
-        - sample_seg:   (B, 5, D, H, W) one-hot
-
-    Output:
-        - flow_fw:       (B, 3, D, H, W) forward deformation field
-        - flow_rv:       (B, 3, D, H, W) reverse deformation field
-                         (in affine-aligned space when use_affine=True)
-        - lambda_map:    (B, 1, D, H, W) per-voxel adaptive-smoothness
-                         weight (Sigmoid output, λ ∈ [0, 1])
-        - affine_matrix: (B, 3, 4) or None — predicted affine
-    """
-    def __init__(self, seg_channels=5, use_affine=False):
-        super().__init__()
-        self.use_affine = use_affine
-        if use_affine:
-            self.affine_net = AffineNet(in_channels=2 * seg_channels)
-
-        self.unet = UNet(in_channels=2 * seg_channels, out_channels=6)
-
-    def forward(self, template_seg, sample_seg):
-        affine_matrix = None
-
-        if self.use_affine:
-            affine_matrix = self.affine_net(template_seg, sample_seg)
-            affine_grid = F.affine_grid(affine_matrix, template_seg.size(), align_corners=False)
-            template_seg = F.grid_sample(
-                template_seg, affine_grid, mode='nearest',
-                padding_mode='zeros', align_corners=False,
-            )
-
-        x = torch.cat([template_seg, sample_seg], dim=1)
-        flow, lambda_map = self.unet(x)
-        flow_fw = flow[:, :3, ...]
-        flow_rv = flow[:, 3:, ...]
-        return flow_fw, flow_rv, lambda_map, affine_matrix
-
-
-# =============================================================================
 # Spatial Transformer
 # =============================================================================
 
@@ -264,3 +218,60 @@ class SpatialTransformer(nn.Module):
             padding_mode='zeros',
             align_corners=False,
         )
+
+
+# =============================================================================
+# Main Model
+# =============================================================================
+
+class SegRegistrationNet(nn.Module):
+    """
+    Seg-only registration network. Optionally includes affine pre-alignment.
+
+    Input:
+        - template_seg: (B, 5, D, H, W) one-hot
+        - sample_seg:   (B, 5, D, H, W) one-hot
+
+    Output:
+        - flow_fw:       (B, 3, D, H, W) forward deformation field
+        - flow_rv:       (B, 3, D, H, W) reverse deformation field
+                         (in affine-aligned space when use_affine=True)
+        - lambda_map:    (B, 1, D, H, W) per-voxel adaptive-smoothness
+                         weight (Sigmoid output, λ ∈ [0, 1])
+        - affine_matrix: (B, 3, 4) or None — predicted affine
+    """
+    def __init__(self, target_size, seg_channels=5, use_affine=False):
+        super().__init__()
+        self.use_affine = use_affine
+        if use_affine:
+            self.affine_net = AffineNet(in_channels=2 * seg_channels)
+
+        self.unet = UNet(in_channels=2 * seg_channels, out_channels=6)
+        self.stn = SpatialTransformer(size=target_size)
+
+    def forward(self, template_seg, sample_seg):
+        affine_matrix = None
+
+        if self.use_affine:
+            affine_matrix = self.affine_net(template_seg, sample_seg)
+            affine_grid = F.affine_grid(affine_matrix, template_seg.size(), align_corners=False)
+            template_seg = F.grid_sample(
+                template_seg, affine_grid, mode='nearest',
+                padding_mode='zeros', align_corners=False,
+            )
+
+        x = torch.cat([template_seg, sample_seg], dim=1)
+        vel, lambda_map = self.unet(x)
+        vel_fw = vel[:, :3, ...]
+        vel_rv = vel[:, 3:, ...]
+        
+        flow_fw = vel_fw / (2 ** 7)
+        flow_rv = vel_rv / (2 ** 7)
+        for _ in range(7):
+            flow_fw = flow_fw + self.stn(flow_fw, flow_fw)
+            flow_rv = flow_rv + self.stn(flow_rv, flow_rv)
+            
+        return flow_fw, flow_rv, lambda_map, affine_matrix
+
+
+

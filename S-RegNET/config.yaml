@@ -43,7 +43,7 @@ model:
 # Affine Pre-alignment
 # -----------------------------------------------------------------------------
 affine:
-  enabled: false
+  enabled: true
   regularization_weight: 0.01
   orthogonality_weight: 0.0
 
