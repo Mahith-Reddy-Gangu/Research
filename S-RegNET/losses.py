@@ -143,7 +143,9 @@ def jacobian_det_loss(flow):
     topk_neg, _ = torch.topk(neg.flatten(), k)
     neg_topk = topk_neg.sum()
 
-    near_zero = F.relu(0.1 - det_norm) * (det_norm > 0).float()
+    # Relaxed pre-fold barrier threshold from 0.1 to 0.05
+    # Allows sharper local deformations (higher Dice) before penalty kicks in
+    near_zero = F.relu(0.05 - det_norm) * (det_norm > 0).float()
     pre_fold = (near_zero ** 2).mean()
 
     return neg_linear + 0.1 * neg_topk + 0.05 * pre_fold
