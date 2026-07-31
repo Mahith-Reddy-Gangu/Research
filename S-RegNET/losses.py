@@ -41,7 +41,7 @@ import torch.nn.functional as F
 # Segmentation Alignment Losses
 # =============================================================================
 
-def dice_loss(y_pred, y_true, smooth=1e-5):
+def dice_loss(y_pred, y_true, smooth=1e-5, class_weights=None):
     """
     Dice loss — foreground classes only (skips class 0 = background).
 
@@ -57,12 +57,21 @@ def dice_loss(y_pred, y_true, smooth=1e-5):
     union = y_pred.sum(dim=vol_axes) + y_true.sum(dim=vol_axes)
 
     dice_score = (2. * intersection + smooth) / (union + smooth)
-    return 1 - dice_score.mean()
+
+    if class_weights is not None:
+        # class_weights has shape (C,). We only want foreground weights
+        fg_weights = class_weights[1:].to(dice_score.device)
+        weighted_dice = (dice_score * fg_weights).sum(dim=-1) / (fg_weights.sum() + 1e-8)
+        return 1 - weighted_dice.mean()
+    else:
+        return 1 - dice_score.mean()
 
 
-def cross_entropy_loss(y_pred, y_true):
+def cross_entropy_loss(y_pred, y_true, class_weights=None):
     """Cross entropy against the argmax of a one-hot target."""
-    return F.cross_entropy(y_pred, y_true.argmax(dim=1))
+    if class_weights is not None:
+        class_weights = class_weights.to(y_pred.device)
+    return F.cross_entropy(y_pred, y_true.argmax(dim=1), weight=class_weights)
 
 
 # =============================================================================
@@ -301,7 +310,7 @@ class SegRegistrationLoss(nn.Module):
     `weights` is required — config.yaml is the single source of truth. Any
     key missing from `weights` is treated as 0.0 at sum time.
     """
-    def __init__(self, weights):
+    def __init__(self, weights, class_weights=None):
         super().__init__()
         if weights is None:
             raise ValueError(
@@ -310,6 +319,9 @@ class SegRegistrationLoss(nn.Module):
                 "and silently caused regressions when config loading was skipped."
             )
         self.weights = weights
+        self.class_weights = class_weights
+        if self.class_weights is not None:
+            self.class_weights = torch.tensor(self.class_weights, dtype=torch.float32)
 
     def forward(self, warped_seg_fw, sample_seg, warped_seg_rv, template_seg,
                 flow_fw, flow_rv, lambda_map, stn,
@@ -317,8 +329,8 @@ class SegRegistrationLoss(nn.Module):
         loss_dict = {}
 
         # Segmentation alignment (symmetric)
-        loss_dict['dice'] = dice_loss(warped_seg_fw, sample_seg) + dice_loss(warped_seg_rv, template_seg)
-        loss_dict['cross_entropy'] = cross_entropy_loss(warped_seg_fw, sample_seg) + cross_entropy_loss(warped_seg_rv, template_seg)
+        loss_dict['dice'] = dice_loss(warped_seg_fw, sample_seg, class_weights=self.class_weights) + dice_loss(warped_seg_rv, template_seg, class_weights=self.class_weights)
+        loss_dict['cross_entropy'] = cross_entropy_loss(warped_seg_fw, sample_seg, class_weights=self.class_weights) + cross_entropy_loss(warped_seg_rv, template_seg, class_weights=self.class_weights)
 
         # Geometric regularization (symmetric)
         loss_dict['bending'] = bending_energy_loss(flow_fw) + bending_energy_loss(flow_rv)

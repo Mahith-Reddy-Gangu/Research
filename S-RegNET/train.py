@@ -111,6 +111,7 @@ class Config:
 
         # Loss weights (merge affine weights into loss dict when enabled)
         self.loss_weights = cfg['loss']
+        self.class_weights = self.loss_weights.pop('class_weights', None)
         if self.use_affine:
             self.loss_weights.setdefault('affine_reg', affine_cfg.get('regularization_weight', 0.01))
             self.loss_weights.setdefault('affine_ortho', affine_cfg.get('orthogonality_weight', 0.01))
@@ -497,7 +498,10 @@ def main():
     logger.info(f"Model parameters: {num_params:,}")
     logger.info(f"Affine pre-alignment: {'ENABLED' if config.use_affine else 'DISABLED'}")
 
-    loss_fn = SegRegistrationLoss(weights=config.loss_weights)
+    loss_fn = SegRegistrationLoss(
+        weights=config.loss_weights,
+        class_weights=config.class_weights
+    )
 
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=config.lr, weight_decay=config.weight_decay,
