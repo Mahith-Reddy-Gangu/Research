@@ -26,7 +26,7 @@ data:
 # Output Configuration
 # -----------------------------------------------------------------------------
 output:
-  base_dir: "/shared/scratch/0/home/v_mahith_reddy/regnet_training_exp4"
+  base_dir: "/shared/scratch/0/home/v_mahith_reddy/regnet_training_exp5"
   checkpoint_subdir: "checkpoints"
   log_subdir: "logs"
   viz_subdir: "viz_output"
