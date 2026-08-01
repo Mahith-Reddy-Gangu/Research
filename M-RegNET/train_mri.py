@@ -454,7 +454,7 @@ def validate_epoch(model, dataloader, loss_fn, device, epoch, config):
 
         # Velocity P50/P99/P99.9 (SVF mode only — final_velocity is None in displacement mode).
         if final_velocity is not None:
-            v_abs = final_velocity.abs().flatten()
+            v_abs = final_velocity.abs().flatten().float()
             v_p50 = torch.quantile(v_abs, 0.5).item()
             v_p99 = torch.quantile(v_abs, 0.99).item()
             v_p999 = torch.quantile(v_abs, 0.999).item()

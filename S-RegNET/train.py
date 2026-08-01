@@ -277,7 +277,7 @@ def _accumulate_lambda_stats(stats_sum, lambda_map):
     is the right discipline here: each batch produces one λ map, and
     batch-mean stats stay invariant to dataset size at fixed batch_size.
     """
-    lam = lambda_map.detach()
+    lam = lambda_map.detach().float()
     stats_sum['mean'] += lam.mean().item()
     stats_sum['std']  += lam.std().item()
     stats_sum['p05']  += lam.quantile(0.05).item()
