@@ -62,7 +62,7 @@ training:
 
   warmup_epochs: 15
 
-  use_amp: false
+  use_amp: true
 
   save_every: 10
   patience: 50

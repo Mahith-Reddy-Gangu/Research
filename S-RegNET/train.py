@@ -20,6 +20,7 @@ from torch.utils.data import DataLoader
 from torch.cuda.amp import GradScaler
 import numpy as np
 import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import sys
 import json
 import logging
