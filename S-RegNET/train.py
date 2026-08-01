@@ -320,7 +320,7 @@ def train_epoch(model, stn, dataloader, loss_fn, optimizer, scaler, device, epoc
         scaler.update()
 
         total_loss += loss.item()
-        dice_score = 1 - loss_dict['dice'].item()
+        dice_score = 1 - (loss_dict['dice'].item() / 2.0)
         total_dice += dice_score
 
         for k, v in loss_dict.items():
@@ -368,10 +368,9 @@ def validate_epoch(model, stn, dataloader, loss_fn, device, epoch, config):
 
         # Diffeomorphism diagnostics.
         det_fw = jacobian_det(flow_fw) / det_ref
-        det_rv = jacobian_det(flow_rv) / det_ref
-        total_folding_pct += 0.5 * ((det_fw < 0).float().mean().item() + (det_rv < 0).float().mean().item()) * 100.0
-        batch_min_det = min(det_fw.min().item(), det_rv.min().item())
-        total_fold_voxels += int((det_fw < 0).sum().item()) + int((det_rv < 0).sum().item())
+        total_folding_pct += (det_fw < 0).float().mean().item() * 100.0
+        batch_min_det = det_fw.min().item()
+        total_fold_voxels += int((det_fw < 0).sum().item())
         if batch_min_det < worst_min_det:
             worst_min_det = batch_min_det
             worst_min_det_subject = batch_idx
