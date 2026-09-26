@@ -64,7 +64,7 @@ data:
 # -----------------------------------------------------------------------------
 output:
   # MESHSUP: own run tree (_v2; _v1 is the earlier run from the mesh-sup branch).
-  base_dir: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/meshsup_v2"
+  base_dir: "/shared/home/v_mahith_reddy/Research/RegNET/S-RegNET/training_results/meshsup_v2"
   checkpoint_subdir: "checkpoints"
   log_subdir: "logs"
   viz_subdir: "viz_output"
@@ -99,7 +99,8 @@ affine:
   # set, which made the terms constants; here there are no distill targets, the
   # affine branch trains, and it needs its regularizer back.
   regularization_weight: 0.01
-  orthogonality_weight: 0.0
+  orthogonality_weight: 0.01
+  orientation_weight: 0.5
 
 # -----------------------------------------------------------------------------
 # Training Hyperparameters
@@ -136,6 +137,7 @@ training:
                                  # trade val Dice (refinement: 0.882 -> 0.846)
                                  # while the mesh metrics improve
   max_grad_norm: 1.0
+  ssl_input_dropout: 0.05
 
 # -----------------------------------------------------------------------------
 # Loss Function Weights
@@ -187,10 +189,15 @@ loss:
   lambda_smoothness: 0.05
   lambda_prior:      0.05
 
+  # Same topology-aware self-supervised robustness as the base run.
+  ssl_consistency:   0.05
+  ssl_jacobian:      0.15
+
   # Affine regularization — mirrors the affine block above (train.py only fills
   # these by setdefault, so an explicit value here wins).
   affine_reg:    0.01
-  affine_ortho:  0.0
+  affine_ortho:  0.01
+  affine_det:    0.5
 
 # -----------------------------------------------------------------------------
 # Reproducibility

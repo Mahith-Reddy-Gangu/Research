@@ -59,7 +59,7 @@ data:
 output:
   # Runs land in <base_dir>/<YYYYMMDD_HHMMSS>/. Own this path — the previous
   # value pointed at v_mahith_reddy's scratch.
-  base_dir: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/synthseg_input"
+  base_dir: "/shared/home/v_mahith_reddy/Research/RegNET/S-RegNET/training_results/synthseg_input"
   checkpoint_subdir: "checkpoints"
   log_subdir: "logs"
   viz_subdir: "viz_output"
@@ -78,7 +78,8 @@ model:
 affine:
   enabled: true
   regularization_weight: 0.01
-  orthogonality_weight: 0.0
+  orthogonality_weight: 0.01
+  orientation_weight: 0.5
 
 # -----------------------------------------------------------------------------
 # Training Hyperparameters
@@ -100,6 +101,7 @@ training:
   save_every: 10
   patience: 50
   max_grad_norm: 1.0
+  ssl_input_dropout: 0.05
 
 # -----------------------------------------------------------------------------
 # Loss Function Weights
@@ -139,9 +141,15 @@ loss:
   lambda_smoothness: 0.05
   lambda_prior:      0.05
 
+  # Self-supervised robustness on perturbed input labels. The augmented
+  # prediction also receives this anti-folding weight.
+  ssl_consistency:   0.05
+  ssl_jacobian:      0.15
+
   # Affine regularization (only active when affine.enabled: true)
   affine_reg:    0.01
-  affine_ortho:  0.0
+  affine_ortho:  0.01
+  affine_det:    0.5
 
 # -----------------------------------------------------------------------------
 # Reproducibility
@@ -152,7 +160,7 @@ seed: 42
 # Device Configuration
 # -----------------------------------------------------------------------------
 device:
-  gpu: "cuda:1"
+  gpu: "cuda:0"
   cudnn_benchmark: true
 
 # -----------------------------------------------------------------------------

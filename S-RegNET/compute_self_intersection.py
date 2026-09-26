@@ -72,9 +72,9 @@ def compute_self_intersection_stats(flow):
     dW_h = warped[:, :, :, 1:, :] - warped[:, :, :, :-1, :]
     dW_w = warped[:, :, :, :, 1:] - warped[:, :, :, :, :-1]
 
-    dW_d = F.pad(dW_d, (0, 0, 0, 0, 0, 1))
-    dW_h = F.pad(dW_h, (0, 0, 0, 1, 0, 0))
-    dW_w = F.pad(dW_w, (0, 1, 0, 0, 0, 0))
+    dW_d = torch.cat([dW_d, dW_d[:, :, -1:, :, :]], dim=2)
+    dW_h = torch.cat([dW_h, dW_h[:, :, :, -1:, :]], dim=3)
+    dW_w = torch.cat([dW_w, dW_w[:, :, :, :, -1:]], dim=4)
 
     a, b, c = dW_w[:, 0], dW_h[:, 0], dW_d[:, 0]
     d, e, f = dW_w[:, 1], dW_h[:, 1], dW_d[:, 1]
@@ -158,10 +158,12 @@ def main():
     data_list = cfg['data']['val_txt'] if args.data_split == 'val' else cfg['data']['train_txt']
     template_seg_path = cfg['data']['template_seg_path']
     seg_filename = cfg['data'].get('seg_filename', 'seg4_onehot.npy')
+    input_seg_filename = cfg['data'].get('input_seg_filename') or None
 
     use_affine = cfg.get('affine', {}).get('enabled', False)
     seg_channels = cfg['model'].get('seg_channels', 5)
     num_classes = cfg['model'].get('num_classes', 5)
+    head = cfg['model'].get('head', 'default')
 
     print("=" * 70)
     print("SELF-INTERSECTION ANALYSIS — seg-only registration")
@@ -171,10 +173,12 @@ def main():
     print(f"Data split:  {args.data_split}")
     print(f"use_affine:  {use_affine}")
     print(f"target_size: {target_size}")
+    print(f"head:        {head}")
 
     # Model + STN
     print("\nLoading model...")
-    model = SegRegistrationNet(target_size=target_size, seg_channels=seg_channels, use_affine=use_affine).to(device)
+    model = SegRegistrationNet(target_size=target_size, seg_channels=seg_channels,
+                               use_affine=use_affine, head=head).to(device)
     stn = SpatialTransformer(size=target_size, device=device).to(device)
 
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
@@ -193,7 +197,8 @@ def main():
     print("\nLoading dataset...")
     dataset = SegDataset(
         data_list, template_seg_path,
-        target_size=target_size, seg_filename=seg_filename, preload=False,
+        target_size=target_size, seg_filename=seg_filename,
+        input_seg_filename=input_seg_filename, preload=False,
     )
     num_samples = len(dataset) if args.num_samples == -1 else min(args.num_samples, len(dataset))
     print(f"Analyzing {num_samples} samples from {len(dataset)} total")
@@ -209,8 +214,9 @@ def main():
             data = dataset[idx]
             template_seg = data['template_seg'].unsqueeze(0).to(device)
             sample_seg = data['sample_seg'].unsqueeze(0).to(device)
+            input_seg = data['input_seg'].unsqueeze(0).to(device)
 
-            final_flow, flow_rv, lambda_map, affine_matrix = model(template_seg, sample_seg)
+            final_flow, flow_rv, lambda_map, affine_matrix = model(template_seg, input_seg)
             warped_seg = _warp_template(template_seg, final_flow, affine_matrix, stn)
 
             dice_per_class, mean_dice = compute_dice_score(
@@ -229,7 +235,7 @@ def main():
                 'jacobian_det_loss_training': jac_train_loss,
             })
 
-            del template_seg, sample_seg, final_flow, flow_rv, lambda_map, affine_matrix
+            del template_seg, sample_seg, input_seg, final_flow, flow_rv, lambda_map, affine_matrix
             del warped_seg, flow_cpu
             if device.type == 'cuda':
                 torch.cuda.empty_cache()

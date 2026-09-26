@@ -61,7 +61,8 @@ from tqdm import tqdm
 from model import (SegRegistrationNet, SpatialTransformer,
                    load_bandlimited_warm_start)
 from losses import (MESH_TERMS, SegRegistrationLoss, compute_dice_score,
-                    jacobian_det, mesh_structure, sample_sdf)
+                    jacobian_det, mesh_structure, sample_sdf,
+                    self_supervised_consistency_loss)
 from get_data import SegDataset
 from git_provenance import write_git_sha
 
@@ -163,9 +164,12 @@ class Config:
         # Loss weights (merge affine weights into loss dict when enabled)
         self.loss_weights = cfg['loss']
         self.class_weights = self.loss_weights.pop('class_weights', None)
+        self.ssl_consistency_weight = self.loss_weights.get('ssl_consistency', 0.0)
+        self.ssl_input_dropout = cfg['training'].get('ssl_input_dropout', 0.0)
         if self.use_affine:
             self.loss_weights.setdefault('affine_reg', affine_cfg.get('regularization_weight', 0.01))
             self.loss_weights.setdefault('affine_ortho', affine_cfg.get('orthogonality_weight', 0.01))
+            self.loss_weights.setdefault('affine_det', affine_cfg.get('orientation_weight', 0.5))
 
     def save(self, path):
         config_dict = {k: str(v) if isinstance(v, Path) else v
@@ -358,6 +362,17 @@ def _warp_sample_inverse(sample_seg, flow_rv, affine_matrix, stn):
         warped = F.grid_sample(warped, inv_grid, mode='bilinear',
                                padding_mode='zeros', align_corners=False)
     return warped
+
+
+def _dropout_input_labels(input_seg, drop_prob):
+    """Replace a small random fraction of input labels with background."""
+    if drop_prob <= 0:
+        return input_seg
+    keep = (torch.rand(input_seg.shape[0], 1, *input_seg.shape[2:],
+                       device=input_seg.device) >= drop_prob).to(input_seg.dtype)
+    background = torch.zeros_like(input_seg)
+    background[:, 0:1] = 1
+    return input_seg * keep + background * (1 - keep)
 
 
 def _sample_field(field, pts):
@@ -576,6 +591,15 @@ def train_epoch(model, stn, dataloader, loss_fn, optimizer, scaler, device, epoc
         with torch.cuda.amp.autocast(enabled=config.use_amp):
             flow_fw, flow_rv, lambda_map, affine_matrix, pred_vel = model(
                 template_seg, input_seg, return_velocity=True)
+            ssl_consistency = None
+            ssl_flow_fw = ssl_flow_rv = None
+            if config.ssl_consistency_weight > 0:
+                ssl_input = _dropout_input_labels(
+                    input_seg, config.ssl_input_dropout)
+                (ssl_flow_fw, ssl_flow_rv, _, ssl_affine_matrix,
+                 ssl_vel) = model(template_seg, ssl_input, return_velocity=True)
+                ssl_consistency = self_supervised_consistency_loss(
+                    pred_vel, ssl_vel, affine_matrix, ssl_affine_matrix)
             warped_seg_fw = _warp_template(template_seg, flow_fw, affine_matrix, stn)
             warped_seg_rv = _warp_sample_inverse(sample_seg, flow_rv, affine_matrix, stn)
 
@@ -590,6 +614,8 @@ def train_epoch(model, stn, dataloader, loss_fn, optimizer, scaler, device, epoc
                 flow_fw, flow_rv, lambda_map,
                 affine_matrix=affine_matrix,
                 pred_vel=pred_vel, target_vel=target_vel, surf=surf,
+                ssl_consistency=ssl_consistency,
+                ssl_flow_fw=ssl_flow_fw, ssl_flow_rv=ssl_flow_rv,
                 return_components=True,
             )
 

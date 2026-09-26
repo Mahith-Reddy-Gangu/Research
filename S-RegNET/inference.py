@@ -51,6 +51,7 @@ from losses import (
     bending_energy_loss, jacobian_det_loss, displacement_loss,
     lambda_weighted_smoothness, lambda_prior_loss,
     affine_regularization_loss, affine_orthogonality_loss,
+    affine_orientation_loss,
     compute_dice_score, jacobian_det,
 )
 
@@ -188,6 +189,7 @@ def compute_all_losses(warped_seg, sample_seg, final_flow,
     if affine_matrix is not None:
         results['affine_reg'] = affine_regularization_loss(affine_matrix).item()
         results['affine_ortho'] = affine_orthogonality_loss(affine_matrix).item()
+        results['affine_det'] = affine_orientation_loss(affine_matrix).item()
 
     # Per-class dice + AHD
     dice_per_class, mean_dice = compute_dice_score(warped_seg, sample_seg, num_classes)
@@ -372,6 +374,7 @@ def _print_losses(losses, class_names, has_affine):
         print("\n  Affine Regularization:")
         print(f"    Affine identity   : {losses['affine_reg']:.6f}")
         print(f"    Affine ortho      : {losses['affine_ortho']:.6f}")
+        print(f"    Affine det barrier: {losses['affine_det']:.6f}")
 
     print(f"\n  Dice Scores:")
     print(f"    Mean Dice         : {losses['dice_score']:.4f}")
@@ -391,9 +394,11 @@ def _print_losses(losses, class_names, has_affine):
 
 
 def setup_inference(checkpoint_path, config_path=None, device='cuda:0',
-                    use_affine=False, verbose=True):
+                    use_affine=None, verbose=True):
     """Load config, template seg, and model once; reuse across samples."""
     cfg = load_config(config_path)
+    if use_affine is None:
+        use_affine = cfg.get('affine', {}).get('enabled', False)
     target_size = tuple(cfg['model']['target_size'])
     num_classes = cfg['model']['num_classes']
     class_names = cfg['visualization']['class_names']

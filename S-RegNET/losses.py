@@ -71,17 +71,21 @@ def dice_loss(y_pred, y_true, smooth=1e-5, class_weights=None):
     y_true = y_true[:, 1:]
 
     intersection = (y_pred * y_true).sum(dim=vol_axes)
-    union = y_pred.sum(dim=vol_axes) + y_true.sum(dim=vol_axes)
+    pred_volume = y_pred.sum(dim=vol_axes)
+    true_volume = y_true.sum(dim=vol_axes)
+    union = pred_volume + true_volume
 
     dice_score = (2. * intersection + smooth) / (union + smooth)
+    valid = (true_volume > smooth) | (pred_volume > smooth)
 
     if class_weights is not None:
         # class_weights has shape (C,). We only want foreground weights
         fg_weights = class_weights[1:].to(dice_score.device)
-        weighted_dice = (dice_score * fg_weights).sum(dim=-1) / (fg_weights.sum() + 1e-8)
-        return 1 - weighted_dice.mean()
+        weights = fg_weights.unsqueeze(0).expand_as(dice_score) * valid
+        weighted_dice = (dice_score * weights).sum() / weights.sum().clamp_min(1e-8)
+        return 1 - weighted_dice
     else:
-        return 1 - dice_score.mean()
+        return 1 - dice_score[valid].mean() if valid.any() else dice_score.new_zeros(())
 
 
 def cross_entropy_loss(y_pred, y_true, class_weights=None):
@@ -129,9 +133,12 @@ def jacobian_det(flow):
     dW_h = warped[:, :, :, 1:, :] - warped[:, :, :, :-1, :]
     dW_w = warped[:, :, :, :, 1:] - warped[:, :, :, :, :-1]
 
-    dW_d = F.pad(dW_d, (0, 0, 0, 0, 0, 1))
-    dW_h = F.pad(dW_h, (0, 0, 0, 1, 0, 0))
-    dW_w = F.pad(dW_w, (0, 1, 0, 0, 0, 0))
+    # Repeat the final forward difference at the boundary. Zero-padding
+    # invents a zero derivative on the last slice and makes identity-like
+    # warps appear to have a near-zero boundary determinant.
+    dW_d = torch.cat([dW_d, dW_d[:, :, -1:, :, :]], dim=2)
+    dW_h = torch.cat([dW_h, dW_h[:, :, :, -1:, :]], dim=3)
+    dW_w = torch.cat([dW_w, dW_w[:, :, :, :, -1:]], dim=4)
 
     a, b, c = dW_w[:, 0], dW_h[:, 0], dW_d[:, 0]
     d, e, f = dW_w[:, 1], dW_h[:, 1], dW_d[:, 1]
@@ -167,7 +174,7 @@ def jacobian_det_loss(flow):
 
     k = max(1, int(0.001 * neg.numel()))
     topk_neg, _ = torch.topk(neg.flatten(), k)
-    neg_topk = topk_neg.sum()
+    neg_topk = topk_neg.clamp_max(10.0).mean()
 
     # Relaxed pre-fold barrier threshold to 0.05 to allow sharper localized deformations
     # Penalizes voxels before they even reach 0 (fold)
@@ -202,6 +209,15 @@ def velocity_mse_loss(pred_vel, target_vel):
     small enough that a half-precision square loses the signal.
     """
     return F.mse_loss(pred_vel.float(), target_vel.float())
+
+
+def self_supervised_consistency_loss(pred_vel, aug_vel, affine_matrix=None,
+                                     aug_affine_matrix=None):
+    """Keep registration stable under small input-label dropout."""
+    loss = F.mse_loss(pred_vel.float(), aug_vel.float())
+    if affine_matrix is not None and aug_affine_matrix is not None:
+        loss = loss + F.mse_loss(affine_matrix.float(), aug_affine_matrix.float())
+    return loss
 
 
 # =============================================================================
@@ -425,6 +441,15 @@ def affine_orthogonality_loss(affine_matrix):
     return F.mse_loss(RtR, I)
 
 
+def affine_orientation_loss(affine_matrix, min_det=0.1):
+    """Barrier against reflections and near-singular affine pre-alignment."""
+    # torch.linalg.det uses an unsupported half-precision CUDA LU path on
+    # some PyTorch/CUDA combinations, so keep this small geometric check in
+    # fp32 while preserving gradients through the affine prediction.
+    det = torch.linalg.det(affine_matrix[:, :3, :3].float())
+    return F.relu(affine_matrix.new_tensor(min_det) - det).pow(2).mean()
+
+
 # =============================================================================
 # Cycle Consistency (diagnostic only)
 # =============================================================================
@@ -480,7 +505,8 @@ class SegRegistrationLoss(nn.Module):
     def forward(self, warped_seg_fw, sample_seg, warped_seg_rv, template_seg,
                 flow_fw, flow_rv, lambda_map,
                 affine_matrix=None, pred_vel=None, target_vel=None,
-                surf=None, return_components=False):
+                surf=None, ssl_consistency=None, ssl_flow_fw=None,
+                ssl_flow_rv=None, return_components=False):
         """`surf`, when given, is the dict train.py._surface_batch builds:
         {'sdf_subj', 'pts_t2s', 'sdf_tpl', 'pts_s2t'} — the two deformed white
         vertex sets and the SDFs they are measured against — plus, when the
@@ -509,6 +535,18 @@ class SegRegistrationLoss(nn.Module):
         else:
             loss_dict['vel_mse'] = torch.tensor(0.0, device=flow_fw.device)
 
+        if ssl_consistency is not None:
+            loss_dict['ssl_consistency'] = ssl_consistency
+        else:
+            loss_dict['ssl_consistency'] = torch.tensor(0.0, device=flow_fw.device)
+
+        # Keep the augmented branch topology-aware as well as consistent.
+        if ssl_flow_fw is not None and ssl_flow_rv is not None:
+            loss_dict['ssl_jacobian'] = (jacobian_det_loss(ssl_flow_fw)
+                                         + jacobian_det_loss(ssl_flow_rv))
+        else:
+            loss_dict['ssl_jacobian'] = torch.tensor(0.0, device=flow_fw.device)
+
         # Surface distance (symmetric: template->subject is the deliverable's
         # own mesh push, subject->template keeps the flow from earning the
         # first direction by collapsing cortex onto the template surface)
@@ -535,9 +573,11 @@ class SegRegistrationLoss(nn.Module):
         if affine_matrix is not None:
             loss_dict['affine_reg'] = affine_regularization_loss(affine_matrix)
             loss_dict['affine_ortho'] = affine_orthogonality_loss(affine_matrix)
+            loss_dict['affine_det'] = affine_orientation_loss(affine_matrix)
         else:
             loss_dict['affine_reg'] = torch.tensor(0.0, device=flow_fw.device)
             loss_dict['affine_ortho'] = torch.tensor(0.0, device=flow_fw.device)
+            loss_dict['affine_det'] = torch.tensor(0.0, device=flow_fw.device)
 
         total_loss = sum(self.weights.get(k, 0.0) * loss_dict[k] for k in loss_dict)
 
