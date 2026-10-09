@@ -1,0 +1,133 @@
+# =============================================================================
+# white_r192_ft — 192³ fine-tune of the res192_v1 checkpoint on the
+# white-surface-interior class
+# =============================================================================
+# Everything except the data matches res192_v1
+# (training_results/res192_v1/20260910_130340/config.json): 192³, band-limited
+# flow head, 40 epochs, lr 5e-5, jacobian 0.005. The data is the new class 3
+# (white-surface interior, seg4_white_onehot.npy) instead of the old
+# seg4_onehot grouping, so the checkpoint contributes weights only — its Adam
+# moments and best-Dice bar belong to a different target.
+
+# -----------------------------------------------------------------------------
+# Data Paths
+# -----------------------------------------------------------------------------
+data:
+  train_txt: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/train.txt"
+  val_txt:   "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/val.txt"
+
+  template_seg_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_white_onehot.npy"
+  template_wm_mesh_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/meshes/OASIS_OAS1_0406_MR1/repaired/template_wm_mesh_repaired.npz"
+
+  seg_filename: "seg4_white_onehot.npy"
+  input_seg_filename: "synthseg_white_onehot_v1.npy"
+
+  # For bandlimit_opt/instance_opt_surface.py and utils/dir_split.py; the loss
+  # below sets no surface or mesh weight. The white SDF and surface are
+  # built from each subject's FreeSurfer ?h.white by utils/make_white_sdf.py, so
+  # they are independent of the class-3 redefinition and need no regeneration.
+  white_sdf_filename: "white_sdf_v1.npy"
+  white_surf_filename: "white_surf_v1.npz"
+  template_white_sdf_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/meshes/OASIS_OAS1_0406_MR1/repaired/template_white_sdf_v1.npy"
+  cortex_labels_dir: "/shared/scratch/0/home/v_nishchay_nilabh/bandlimit_opt/fsaverage_labels"
+
+# -----------------------------------------------------------------------------
+# Output Configuration
+# -----------------------------------------------------------------------------
+output:
+  base_dir: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/white_r192_ft"
+  checkpoint_subdir: "checkpoints"
+  log_subdir: "logs"
+  viz_subdir: "viz_output"
+
+# -----------------------------------------------------------------------------
+# Model Architecture
+# -----------------------------------------------------------------------------
+model:
+  target_size: [192, 192, 192]   # (D, H, W) — volume dims after resize
+  num_classes: 5
+  seg_channels: 5
+  head: "bandlimited"            # tied band-limited velocity head — the
+                                 # res192_v1 checkpoint has no out_conv
+  lowpass_size: 96               # band limit this run trained with (the
+                                 # default 3/4 of 192 = 144 changes its output)
+
+# -----------------------------------------------------------------------------
+# Affine Pre-alignment
+# -----------------------------------------------------------------------------
+affine:
+  enabled: true
+  regularization_weight: 0.01
+  orthogonality_weight: 0.0
+
+# -----------------------------------------------------------------------------
+# Training Hyperparameters
+# -----------------------------------------------------------------------------
+training:
+  batch_size: 1
+  num_epochs: 40
+  num_workers: 0
+  pin_memory: true
+
+  learning_rate: 5.0e-5
+  min_learning_rate: 1.0e-6
+  weight_decay: 1.0e-5
+
+  warmup_epochs: 3
+
+  use_amp: true
+
+  save_every: 5
+  patience: 40
+  max_grad_norm: 1.0
+
+# -----------------------------------------------------------------------------
+# Loss Function Weights
+# -----------------------------------------------------------------------------
+loss:
+  dice:          0.8
+  cross_entropy: 0.2
+  class_weights: [0.1, 1.0, 1.0, 5.0, 1.0]
+
+  bending:       0.02
+  jacobian:      0.005
+  displacement:  0.01
+
+  lambda_smoothness: 0.05
+  lambda_prior:      0.05
+
+  affine_reg:    0.01
+  affine_ortho:  0.0
+
+# -----------------------------------------------------------------------------
+# Reproducibility
+# -----------------------------------------------------------------------------
+seed: 42
+
+# -----------------------------------------------------------------------------
+# Device Configuration
+# -----------------------------------------------------------------------------
+device:
+  gpu: "cuda:7"
+  cudnn_benchmark: true
+
+# -----------------------------------------------------------------------------
+# Visualization Settings (used by inference / run_inference_all)
+# -----------------------------------------------------------------------------
+visualization:
+  num_samples: 30
+  detailed_samples: 10
+  seed: 42
+  class_names:
+    - "Background"
+    - "Cortex"
+    - "Other Brain"
+    - "White Surface Interior"
+    - "CSF"
+
+# -----------------------------------------------------------------------------
+# Resume Training
+# -----------------------------------------------------------------------------
+resume:
+  checkpoint_path: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/res192_v1/20260910_130340/checkpoints/best_model.pth"
+  weights_only: true

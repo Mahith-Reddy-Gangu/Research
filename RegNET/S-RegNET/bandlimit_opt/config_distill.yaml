@@ -1,0 +1,186 @@
+# =============================================================================
+# Seg-only Registration Configuration — DISTILLATION RUN
+# =============================================================================
+# Retrains the net to predict, in one forward pass, what the per-subject
+# band-limited "combo" optimizer produces today (WM Dice 0.8781, mesh
+# self-intersection 0.094%, symmetric surface distance 1.002 mm vs the net's
+# own 0.8556 / 0.209% / 1.145 mm). See README.md, "Distillation".
+#
+# Every deviation from config.yaml is commented below with its reason. Run:
+#   python train.py --config bandlimit_opt/config_distill.yaml
+# Targets must exist first:
+#   python bandlimit_opt/generate_distill_targets.py --checkpoint 20260801_083414 \
+#       --config config.yaml --device cuda:0
+
+# -----------------------------------------------------------------------------
+# Data Paths
+# -----------------------------------------------------------------------------
+data:
+  # Training and validation data lists (text files; one path per line, each
+  # pointing at the seg .npy of one subject — the dataset loader infers the
+  # subject directory from the file path).
+  train_txt: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/train.txt"
+  val_txt:   "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/val.txt"
+
+  # Template subject seg (used as moving image for every registration).
+  template_seg_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_white_onehot.npy"
+
+  # Template WM mesh, REPAIRED (see config.yaml for the provenance note).
+  template_wm_mesh_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/meshes/OASIS_OAS1_0406_MR1/repaired/template_wm_mesh_repaired.npz"
+
+  seg_filename: "seg4_white_onehot.npy"
+  input_seg_filename: "synthseg_white_onehot_v1.npy"
+
+  # DISTILL: per-subject tied velocity v* = lp96(vel_fw) + up(delta*) written
+  # by bandlimit_opt/generate_distill_targets.py next to each subject's segs.
+  # Only the TRAIN loader reads it (train.py) — val stays target-free so its
+  # Dice remains an honest held-out number. Subjects without the file keep
+  # training normally, minus the regression term.
+  target_vel_filename: "distill_vel_v1.npy"
+
+# -----------------------------------------------------------------------------
+# Output Configuration
+# -----------------------------------------------------------------------------
+output:
+  # Own run tree: the distilled net is a different architecture from the runs
+  # under synthseg_input/ and must not be mistaken for one of them.
+  base_dir: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/distill_v1"
+  checkpoint_subdir: "checkpoints"
+  log_subdir: "logs"
+  viz_subdir: "viz_output"
+
+# -----------------------------------------------------------------------------
+# Model Architecture
+# -----------------------------------------------------------------------------
+model:
+  target_size: [128, 128, 128]   # (D, H, W) — volume dims after resize
+  num_classes: 5                 # incl. background (channel 0)
+  seg_channels: 5
+
+  # DISTILL: two-branch band-limited head (model.BandLimitedHead) replacing the
+  # 6-channel flow head — v = lp96(1x1 conv on dec1) + up(1x1 conv on dec2, 64³,
+  # zero-init), flow_fw = exp(+v), flow_rv = exp(-v). The tie is structural (the
+  # inverse the mesh push rides on is exact by construction) and content below
+  # wavelength ~2.7 voxels cannot be emitted on any input. This is the combo's
+  # own function class, so the targets are reachable by construction.
+  head: bandlimited
+
+# -----------------------------------------------------------------------------
+# Affine Pre-alignment
+# -----------------------------------------------------------------------------
+affine:
+  enabled: true
+  # DISTILL: 0.01 -> 0.0 on both. Each target lives in the space the warm-start
+  # checkpoint's affine put it in, so train.py freezes affine_net whenever
+  # target_vel_filename is set; a frozen branch makes both terms constants.
+  regularization_weight: 0.0
+  orthogonality_weight: 0.0
+
+# -----------------------------------------------------------------------------
+# Training Hyperparameters
+# -----------------------------------------------------------------------------
+training:
+  batch_size: 1
+  num_epochs: 100                # DISTILL: 200 -> 100; this is a refinement of
+                                 # an already-trained net, not a fresh fit
+  num_workers: 0
+  pin_memory: true
+
+  learning_rate: 1.0e-4
+  min_learning_rate: 1.0e-6
+  weight_decay: 1.0e-5
+
+  warmup_epochs: 5               # DISTILL: 15 -> 5; warm start begins on the
+                                 # manifold, so a long ramp only wastes epochs
+
+  use_amp: true                  # vel_mse is computed in fp32 regardless
+                                 # (losses.velocity_mse_loss)
+
+  save_every: 10
+  patience: 30                   # DISTILL: 50 -> 30; a run that has not moved
+                                 # in 30 epochs here is not going to
+  max_grad_norm: 1.0
+
+# -----------------------------------------------------------------------------
+# Loss Function Weights
+# -----------------------------------------------------------------------------
+loss:
+  # Segmentation alignment — KEPT at the usual weights. They ground the net in
+  # the task, so a stale or occasionally-bad target cannot drag accuracy down
+  # unopposed.
+  dice:          0.8
+  cross_entropy: 0.2
+  class_weights: [0.1, 1.0, 1.0, 5.0, 1.0]
+
+  # DISTILL: regression of the predicted tied velocity onto the combo target,
+  # on velocities rather than integrated flows.
+  # CALIBRATED 2026-08-24 (3-subject warm-start forward pass): raw vel_mse
+  # 0.00247 vs weighted dice 0.509 — the warm-started net already equals the
+  # lp96 half of the target, so the raw term is just the delta's energy.
+  # Weight 206 puts it at 1x weighted dice, 412 at 2x; 300 ~= 1.5x.
+  # Recheck against the first epoch's loss_components.jsonl.
+  vel_mse:       300.0
+
+  # Geometric regularization
+  bending:       0.02          # second-order smoothness
+  jacobian:      0.005         # DISTILL: 0.15 -> 0.005. At warm start the tied
+                               # inverse exp(-v) has never been trained (the
+                               # checkpoint only regularized its two independent
+                               # fields) and its raw jacobian measured ~1445 in
+                               # the combo, so 0.15 would outweigh dice ~500:1
+                               # and stall alignment; 0.005 restores the ~8:1
+                               # ratio that worked (generate_distill_targets.py). The
+                               # regression term is the main anti-fold force
+                               # here — the targets fold at ~0.09%. Watch val
+                               # folding_pct every epoch and raise toward 0.05
+                               # only if it climbs above the baseline run.
+  displacement:  0.01          # penalises large per-voxel displacements
+
+  # Lambda-based adaptive regularization — KEPT. The λ head trains normally; it
+  # was frozen in the combo only because that was a per-instance fit.
+  lambda_smoothness: 0.05
+  lambda_prior:      0.05
+
+  # Affine regularization — zeroed, see the affine block above.
+  affine_reg:    0.0
+  affine_ortho:  0.0
+
+# -----------------------------------------------------------------------------
+# Reproducibility
+# -----------------------------------------------------------------------------
+seed: 42
+
+# -----------------------------------------------------------------------------
+# Device Configuration
+# -----------------------------------------------------------------------------
+device:
+  gpu: "cuda:0"
+  cudnn_benchmark: true
+
+# -----------------------------------------------------------------------------
+# Visualization Settings (used by inference / run_inference_all)
+# -----------------------------------------------------------------------------
+visualization:
+  num_samples: 30
+  detailed_samples: 10
+  seed: 42
+  class_names:
+    - "Background"
+    - "Cortex"
+    - "Other Brain"
+    - "White Surface Interior"
+    - "CSF"
+
+# -----------------------------------------------------------------------------
+# Resume Training
+# -----------------------------------------------------------------------------
+resume:
+  # DISTILL: WARM START, never from scratch — the targets are corrections OF
+  # this checkpoint's own predictions, so a fresh net starts off-manifold and
+  # the regression term pushes it toward a mean field before Dice can shape it.
+  # With model.head: bandlimited, train.py detects the old 6-channel out_conv
+  # here and calls model.load_bandlimited_warm_start: the trunk, λ head and
+  # affine net load normally, out_conv.weight[:3]/bias[:3] become the base
+  # branch, the residual branch stays zero, and the optimizer state and epoch
+  # counter of that run are discarded.
+  checkpoint_path: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/mahith_experiment/20260801_083414/checkpoints/best_model.pth"
