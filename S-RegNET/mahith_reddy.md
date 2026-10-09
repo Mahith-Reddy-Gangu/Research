@@ -1,0 +1,17 @@
+This file proves we are running the updated dual-flow model!
+
+## Run History & Strategies
+
+### Previous Run (Exp 4)
+- **Model Details:** Vanilla UNet with dual heads (flow + lambda)
+- **Affine Pre-alignment:** Disabled
+- **Flow Output:** Direct dense displacement field
+- **Results:** Dice score of 0.6459 and 0.001% folding.
+- **Analysis:** The network struggled with global registration because dense flow UNets are poor at handling large translations and rotations without an affine pre-alignment stage. Additionally, optimizing Dice too hard risks topological violations (folding), limiting how well the tissues can be aligned.
+
+### New Strategy (Exp 5)
+To drastically improve the Dice score (target > 0.90) while guaranteeing low folding, the following two major architectural and config changes were implemented:
+1. **Affine Pre-Alignment Enabled (`config.yaml`)**:
+   We enabled `affine.enabled: true` to handle global alignment before local deformation. The UNet now only needs to capture fine-grained local differences, removing a massive burden that was causing low Dice scores.
+2. **Diffeomorphic Integration (`model.py`)**:
+   Instead of predicting a displacement field directly, the UNet now predicts a **Stationary Velocity Field (SVF)**. This velocity field is integrated over time (using 7 steps of Scaling and Squaring). This mathematical framework mathematically guarantees a diffeomorphic (invertible) transformation, meaning zero folding. This allows the network to aggressively optimize the Dice score to align tissues perfectly without triggering the Jacobian anti-folding penalties.
