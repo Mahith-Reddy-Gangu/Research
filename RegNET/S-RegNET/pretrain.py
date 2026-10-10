@@ -48,8 +48,12 @@ def generate_synthetic_batch(input_seg, stn, lowpass_size, sigma=0.1):
     for _ in range(7):
         flow_gt = flow_gt + stn(flow_gt, flow_gt)
         
-    # Warp input segmentation to create synthetic target
-    synthetic_target = stn(input_seg, flow_gt)
+    # Warp input segmentation to create synthetic target using nearest to stay one-hot
+    grid = stn.id_grid.expand(B, -1, -1, -1, -1)
+    warped_grid = grid + flow_gt.permute(0, 2, 3, 4, 1)
+    synthetic_target = F.grid_sample(
+        input_seg, warped_grid, mode='nearest', padding_mode='zeros', align_corners=False
+    )
     
     return synthetic_target, v_gt
 
