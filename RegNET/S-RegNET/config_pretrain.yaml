@@ -3,9 +3,9 @@
 # =============================================================================
 
 data:
-  train_txt: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/train.txt"
-  val_txt:   "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/val.txt"
-  template_seg_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_white_onehot.npy"
+  train_txt: "/shared/home/v_mahith_reddy/oasis_data/train.txt"
+  val_txt:   "/shared/home/v_mahith_reddy/oasis_data/val.txt"
+  template_seg_path: "/shared/home/v_mahith_reddy/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_white_onehot.npy"
   seg_filename: "seg4_white_onehot.npy"
   input_seg_filename: "synthseg_white_onehot_v1.npy"
 
