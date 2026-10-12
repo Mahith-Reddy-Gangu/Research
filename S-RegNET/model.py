@@ -383,4 +383,57 @@ def load_bandlimited_warm_start(model, state_dict):
             f"missing {missing}, unexpected {unexpected}")
 
 
+def load_ssl_warm_start(model, state_dict):
+    """Transfer an MRI-SSL band-limited U-Net into the segmentation model.
+
+    The SSL network sees two MRI channels (fixed, synthetically warped); the
+    segmentation network sees ten one-hot channels. Only the shared U-Net
+    trunk and velocity head are transferred. The first convolution is expanded
+    by copying each MRI filter across that modality's five one-hot channels;
+    affine and lambda heads remain at their task-specific initialization.
+    """
+    target_state = model.state_dict()
+    source_state = {
+        key: value for key, value in state_dict.items()
+        if key.startswith('unet.') and '.lambda_head.' not in key
+    }
+
+    adapted = {}
+    skipped = []
+    first_conv = 'unet.enc1.block.0.weight'
+    for key, target in target_state.items():
+        if not key.startswith('unet.') or '.lambda_head.' in key:
+            continue
+        source = source_state.get(key)
+        if source is None:
+            skipped.append(key)
+            continue
+        if source.shape == target.shape:
+            adapted[key] = source
+        elif (key == first_conv and source.ndim == 5 and target.ndim == 5
+              and source.shape[0] == target.shape[0]
+              and source.shape[1] == 2 and target.shape[1] == 10
+              and source.shape[2:] == target.shape[2:]):
+            adapted[key] = torch.cat(
+                [source[:, 0:1].expand(-1, 5, -1, -1, -1),
+                 source[:, 1:2].expand(-1, 5, -1, -1, -1)],
+                dim=1,
+            )
+        else:
+            raise RuntimeError(
+                f"SSL warm start: incompatible tensor {key}: "
+                f"checkpoint {tuple(source.shape)}, model {tuple(target.shape)}")
+
+    missing = [key for key in target_state
+               if key.startswith('unet.') and '.lambda_head.' not in key
+               and key not in adapted]
+    if missing or skipped:
+        raise RuntimeError(
+            f"SSL warm start: incomplete shared U-Net weights — "
+            f"missing {missing}, skipped {skipped}")
+
+    target_state.update(adapted)
+    model.load_state_dict(target_state)
+    return len(adapted)
+
 

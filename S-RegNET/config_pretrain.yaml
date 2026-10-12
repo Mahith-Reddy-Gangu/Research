@@ -1,0 +1,50 @@
+# MRI-only self-supervised pretraining for the band-limited S-RegNET trunk.
+# The lists may include any subjects with brain.npy; no segmentation files are
+# opened. Keep train and val subject-disjoint and exclude the template subject.
+data:
+  train_txt: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/train.txt"
+  val_txt: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/val.txt"
+  mri_filename: "brain.npy"
+  template_subject_dir: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans/OASIS_OAS1_0406_MR1"
+
+output:
+  base_dir: "/shared/scratch/0/home/v_mahith_reddy/training_results/sregnet_ssl_mri"
+  checkpoint_subdir: "checkpoints"
+  log_subdir: "logs"
+
+model:
+  target_size: [128, 128, 128]
+  lowpass_size: 96
+
+# Smooth control-lattice SVFs are upsampled in voxel space and converted to the
+# model's normalized (x,y,z) grid units. Per-sample amplitude is reduced only
+# when the integrated target violates the explicit Jacobian safety threshold.
+synthetic:
+  control_points: 16
+  velocity_std_voxels: 1.5
+  min_jacobian_det: 0.05
+  max_safety_retries: 8
+
+training:
+  batch_size: 1
+  num_epochs: 100
+  num_workers: 0
+  pin_memory: true
+  learning_rate: 1.0e-4
+  min_learning_rate: 1.0e-6
+  weight_decay: 1.0e-5
+  warmup_epochs: 5
+  use_amp: true
+  save_every: 10
+  patience: 20
+  max_grad_norm: 1.0
+
+loss:
+  bending: 0.02
+  jacobian: 0.005
+
+seed: 42
+
+device:
+  gpu: "cuda:0"
+  cudnn_benchmark: false

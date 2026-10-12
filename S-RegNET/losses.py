@@ -28,6 +28,7 @@ Composite (sum of weighted terms; weights live in config.yaml -> loss):
     Mesh regularisers (only active when `surf` carries 'mesh')
       - mesh_edge, mesh_lap, mesh_normal: distortion of the full pushed
         template mesh in excess of the affine-aligned template's own
+      - mesh_area: oriented pushed/reference triangle-area barrier below 10%
 
     (No cycle term — single-SVF model makes the inverse exact; see
     cycle_consistency_loss, kept only as a diagnostic.)
@@ -259,6 +260,8 @@ def surface_distance_loss(sdf, pts):
 # training pays for the distortion the refinement had to undo.
 
 MESH_TERMS = ('mesh_edge', 'mesh_lap', 'mesh_normal')
+MESH_AREA_TERMS = ('mesh_area',)
+MESH_ALL_TERMS = MESH_TERMS + MESH_AREA_TERMS
 
 
 def mesh_structure(faces, n_verts, mm, device):
@@ -294,19 +297,40 @@ def mesh_geometry(v, m):
     return elen, lap, bend
 
 
-def mesh_regularizers(v_pushed, v_ref, m):
+def mesh_regularizers(v_pushed, v_ref, m, include_area=True):
     """{mesh_edge, mesh_lap, mesh_normal}: distortion of the pushed mesh in
     EXCESS of the reference mesh's own — the template's curvature is free, only
     what the flow adds costs. Squared log edge-length ratio (scale-free), relu
     excess of the uniform-Laplacian magnitude (mm), relu excess of
-    1 - cos(dihedral) over adjacent faces (scale-free). The reference is a
-    constant: no gradient flows into it."""
+    1 - cos(dihedral) over adjacent faces (scale-free), and an oriented-area
+    barrier that penalizes faces below 10% of their reference signed area.
+    The reference is a constant: no gradient flows into it. The area barrier
+    is a local face-orientation/collapse guard, not a self-intersection test."""
     elen, lap, bend = mesh_geometry(v_pushed.float(), m)
     with torch.no_grad():
         elen0, lap0, bend0 = mesh_geometry(v_ref.float(), m)
-    return {'mesh_edge': torch.log(elen / elen0.clamp_min(1e-6)).pow(2).mean(),
-            'mesh_lap': torch.relu(lap - lap0).mean(),
-            'mesh_normal': torch.relu(bend - bend0).mean()}
+
+    result = {'mesh_edge': torch.log(elen / elen0.clamp_min(1e-6)).pow(2).mean(),
+              'mesh_lap': torch.relu(lap - lap0).mean(),
+              'mesh_normal': torch.relu(bend - bend0).mean()}
+    if include_area:
+        with torch.no_grad():
+            reference_faces = v_ref.float()[m['faces']]
+            reference_normals = torch.cross(
+                reference_faces[:, 1] - reference_faces[:, 0],
+                reference_faces[:, 2] - reference_faces[:, 0],
+                dim=1,
+            )
+            reference_area_sq = reference_normals.square().sum(dim=1).clamp_min(1e-20)
+        pushed_faces = v_pushed.float()[m['faces']]
+        pushed_normals = torch.cross(
+            pushed_faces[:, 1] - pushed_faces[:, 0],
+            pushed_faces[:, 2] - pushed_faces[:, 0],
+            dim=1,
+        )
+        signed_area_ratio = (pushed_normals * reference_normals).sum(dim=1) / reference_area_sq
+        result['mesh_area'] = torch.relu(0.1 - signed_area_ratio).square().mean()
+    return result
 
 
 # =============================================================================
@@ -455,7 +479,8 @@ class SegRegistrationLoss(nn.Module):
       - lambda_smoothness, lambda_prior
       - vel_mse      (active only when pred_vel and target_vel are not None)
       - surface, surface_tail     (active only when surf is not None)
-      - mesh_edge, mesh_lap, mesh_normal  (active only when surf has 'mesh')
+      - mesh_edge, mesh_lap, mesh_normal, mesh_area
+        (active only when surf has 'mesh')
       - affine_reg, affine_ortho  (active only when affine_matrix is not None)
 
     No cycle term: the model integrates a single velocity field both ways
@@ -527,8 +552,11 @@ class SegRegistrationLoss(nn.Module):
         mesh = {}
         if surf is not None and 'mesh' in surf:
             with torch.autocast(flow_fw.device.type, enabled=False):
-                mesh = mesh_regularizers(*surf['mesh'])
-        for k in MESH_TERMS:
+                mesh = mesh_regularizers(
+                    *surf['mesh'],
+                    include_area=self.weights.get('mesh_area', 0.0) != 0.0,
+                )
+        for k in MESH_ALL_TERMS:
             loss_dict[k] = mesh.get(k, torch.tensor(0.0, device=flow_fw.device))
 
         # Affine

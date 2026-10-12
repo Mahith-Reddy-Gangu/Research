@@ -6,7 +6,10 @@
 # its Dice/CE objective the two surface-distance directions (0.2 / 0.03, the
 # surface-loss run's weights) and the three mesh regularisers on the full pushed
 # template mesh (edge 1.3 / Laplacian 3.4 / normal 6.4, the refinement's
-# calibrated weights); displacement penalty off. 30 epochs, lr 5e-5.
+# calibrated weights), plus an oriented-area collapse/flip barrier. The area
+# weight is a new ablation and must be selected on held-out validation data;
+# it is not part of the historical calibrated objective. Displacement off.
+# 30 epochs, lr 5e-5.
 #
 # Everything not tagged MESHSUP: matches config.yaml except the
 # RES192:-tagged 192³ choices, which this run keeps. Evaluate BOTH
@@ -165,6 +168,11 @@ loss:
   mesh_edge:     1.3
   mesh_lap:      3.4
   mesh_normal:   6.4
+  # NEW: squared barrier on oriented pushed/reference face-area ratio below
+  # 0.1. This discourages local triangle collapse/reversal, but cannot detect
+  # non-local triangle-triangle intersections; monitor both mesh metrics.
+  # Ablate 0.0 vs 6.4 on validation before choosing the final checkpoint.
+  mesh_area:     6.4
 
   # RES192 (was SURFACE): no vel_mse. See data.target_vel_filename above.
 

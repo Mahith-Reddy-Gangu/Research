@@ -1,0 +1,80 @@
+data:
+  train_txt: /shared/scratch/0/home/v_nishchay_nilabh/oasis_data/train.txt
+  val_txt: /shared/scratch/0/home/v_nishchay_nilabh/oasis_data/val.txt
+  template_seg_path: /shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_white_onehot.npy
+  template_wm_mesh_path: /shared/scratch/0/home/v_nishchay_nilabh/oasis_data/meshes/OASIS_OAS1_0406_MR1/repaired/template_wm_mesh_repaired.npz
+  seg_filename: seg4_white_onehot.npy
+  input_seg_filename: synthseg_white_onehot_v1.npy
+  white_sdf_filename: white_sdf_v1.npy
+  white_surf_filename: white_surf_v1.npz
+  template_white_sdf_path: /shared/scratch/0/home/v_nishchay_nilabh/oasis_data/meshes/OASIS_OAS1_0406_MR1/repaired/template_white_sdf_v1.npy
+  cortex_labels_dir: /shared/scratch/0/home/v_nishchay_nilabh/bandlimit_opt/fsaverage_labels
+output:
+  base_dir: /shared/scratch/0/home/v_mahith_reddy/training_results/sregnet_ssl_meshsup
+  checkpoint_subdir: checkpoints
+  log_subdir: logs
+  viz_subdir: viz_output
+model:
+  target_size:
+  - 192
+  - 192
+  - 192
+  num_classes: 5
+  seg_channels: 5
+  head: bandlimited
+affine:
+  enabled: true
+  regularization_weight: 0.01
+  orthogonality_weight: 0.0
+training:
+  batch_size: 1
+  num_epochs: 200
+  num_workers: 0
+  pin_memory: true
+  learning_rate: 5.0e-05
+  min_learning_rate: 1.0e-06
+  weight_decay: 1.0e-05
+  warmup_epochs: 3
+  use_amp: true
+  save_every: 5
+  patience: 30
+  max_grad_norm: 1.0
+loss:
+  dice: 0.8
+  cross_entropy: 0.2
+  class_weights:
+  - 0.1
+  - 1.0
+  - 1.0
+  - 5.0
+  - 1.0
+  surface: 0.2
+  surface_tail: 0.03
+  mesh_edge: 1.3
+  mesh_lap: 3.4
+  mesh_normal: 6.4
+  mesh_area: 6.4
+  bending: 0.02
+  jacobian: 0.005
+  displacement: 0.0
+  lambda_smoothness: 0.05
+  lambda_prior: 0.05
+  affine_reg: 0.01
+  affine_ortho: 0.0
+seed: 42
+device:
+  gpu: cuda:0
+  cudnn_benchmark: true
+visualization:
+  num_samples: 30
+  detailed_samples: 10
+  seed: 42
+  class_names:
+  - Background
+  - Cortex
+  - Other Brain
+  - White Surface Interior
+  - CSF
+resume:
+  checkpoint_path: /shared/scratch/0/home/v_mahith_reddy/training_results/sregnet_ssl_mri/20261010_071904/checkpoints/best_pretrain_model.pth
+  weights_only: true

@@ -13,7 +13,8 @@ exist here. This is the voxel side — the same numbers training optimizes.
 The warp replays training exactly (train.py:_warp_template): affine-align the
 template (bilinear) then STN with flow_fw as a PULL field. Affine is
 auto-detected from the checkpoint, so a run trained with affine on/off needs no
-flag.
+flag. When configured, input_seg_filename drives the model while the
+supervision seg_filename remains the visualization and metric target.
 
 Outputs (into --output_dir):
     diff_grid.png          N×3 TP/FP/FN grid for the target class + warped outline
@@ -134,8 +135,9 @@ def build_row(ctx, ds, idx, target_class):
     sample = ds[idx]
     name = Path(ds.subject_dirs[idx]).name
     sample_seg = sample['sample_seg'].unsqueeze(0).to(device)
+    input_seg = sample.get('input_seg', sample['sample_seg']).unsqueeze(0).to(device)
 
-    warped_seg, flow_fw, flow_rv, lambda_map, _ = warp_template(ctx, sample_seg)
+    warped_seg, flow_fw, flow_rv, lambda_map, _ = warp_template(ctx, input_seg)
 
     warped_m = (warped_seg.argmax(1)[0] == target_class).cpu().numpy()
     target_m = (sample['sample_seg'].argmax(0) == target_class).numpy()
@@ -268,6 +270,7 @@ def main():
     d = cfg['data']
     ds = SegDataset(args.val_txt or d['val_txt'], d['template_seg_path'],
                     target_size=ctx['target_size'], seg_filename=d['seg_filename'],
+                    input_seg_filename=d.get('input_seg_filename'),
                     preload=False)
 
     if args.sample_idxs:

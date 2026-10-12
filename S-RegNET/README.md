@@ -138,7 +138,49 @@ Single-file inference (warped seg NIfTI + loss dump, no mesh):
 Full voxel + mesh sweeps: `utils/evaluate_synthseg_input.py` (deployment
 condition) and `utils/evaluate_all.py` (every subject, `--self_int` for topology).
 
-## 4. Train it yourself
+## 4. MRI-only self-supervised pretraining
+
+The optional MRI-SSL stage follows the proposed equivariance experiment: it
+loads `brain.npy` volumes only, synthesizes a smooth band-limited stationary
+velocity field, warps each MRI using the same scaling-and-squaring operator as
+S-RegNET, then regresses directly to the known pre-integration velocity.
+Velocity MSE is the primary signal; bending energy and the existing Jacobian
+barrier are auxiliary regularizers. No labels, Dice loss, or mesh targets are
+used during this phase.
+
+```bash
+# Lists contain subject paths; only the parent directory and brain.npy are read.
+# Ensure train/val are disjoint and the template subject is excluded.
+CUDA_VISIBLE_DEVICES=0 python pretrain.py --config config_pretrain.yaml
+```
+
+The output is
+`<output.base_dir>/<timestamp>/checkpoints/best_pretrain_model.pth`.
+Synthetic target velocity is band-limited to the model's configured head.
+Targets whose integrated Jacobian minimum falls below the configured positive
+floor are reduced in amplitude; a failed safety check aborts rather than
+silently training on a folded synthetic target.
+
+To fine-tune, copy `config_meshsup.yaml`, set its
+`resume.checkpoint_path` to `best_pretrain_model.pth`,
+`resume.weights_only: true`, and give the copied config a new output directory.
+`train.py` transfers the shared U-Net and velocity head, expanding the two
+MRI input filters to the ten one-hot channels. The affine and segmentation-
+specific lambda head are initialized for the downstream task. Fine-tuning then
+uses labeled Dice/CE, surface SDF (including its upper-tail term), Jacobian,
+and mesh regularizers.
+
+This is a testable initialization hypothesis, not a guaranteed improvement:
+MRI intensity features and one-hot segmentation features differ. Compare SSL
+and non-SSL fine-tunes with identical subject splits, seeds, training budgets,
+and validation checkpoint selection. Report held-out per-class/WM Dice,
+surface mean and HD95, Jacobian folding, face flips, and non-local mesh
+self-intersections separately. The mesh-area term is a local oriented-face
+collapse/reversal barrier; it cannot prevent or measure non-local
+triangle-triangle intersections. The mesh topology is inherited from the
+template, but self-intersections after deformation must still be measured.
+
+## 5. Train it yourself
 
 Three stages, one GPU each. Stage A is ~1–2 days, B ~8 h, C ~5 h.
 
@@ -173,10 +215,11 @@ Every deviation from `config.yaml` is commented inside `config_distill.yaml`.
 Evaluate the result with section 3 (val subjects have no targets, so their
 numbers are honest).
 
-## 5. Surface + mesh supervision (192³)
+## 6. Surface + mesh supervision (192³)
 
 The pushed template mesh is scored as a mesh, not as voxels: a symmetric
-surface distance plus three mesh regularisers, all built from the subject's
+surface distance plus the three calibrated mesh regularisers and the optional
+local oriented-area barrier, all built from the subject's
 SynthSeg segmentation at deployment (no ground truth needed). At 192³ this is
 a fine-tune of the existing net; per subject it is the 50-step refinement's
 objective. The tuned 50-step arm takes mesh↔GT symmetric mean 0.91 → 0.66 mm,
@@ -192,6 +235,7 @@ L(δ) = w_d·Dice + w_ce·CE                                      voxel data ter
      + w_e · mean (log |e'|/|e|)²                                 edge-length ratio
      + w_l · mean relu(|Δ'v| − |Δv|)                              Laplacian excess
      + w_n · mean relu((1 − n'a·n'b) − (1 − na·nb))               normal excess
+     + w_a · mean relu(0.1 − oriented_area_ratio)²                 local face barrier
      + bending(δ) + jacobian(δ)                                   velocity terms, unchanged
 ```
 
@@ -239,7 +283,7 @@ comparable to older sweep rows; 50 steps is the knee at ~9 s per subject.
 `arms.csv` the WM Dice and folding, `dir_split` the template→GT vs
 GT→template split.
 
-## 6. How the model works
+## 7. How the model works
 
 - **Input**: template one-hot (5 ch) ⊕ subject one-hot (5 ch) = 10 channels.
   An `AffineNet` pre-aligns the template first; a 3D U-Net then predicts a
@@ -267,16 +311,17 @@ GT→template split.
   the template's, so handles/components are the template's for every subject.
   Self-intersection is the one thing that can still fail — that is the metric.
 
-## 7. File map
+## 8. File map
 
 | file | role |
 |---|---|
 | `config.yaml` / `bandlimit_opt/config_distill.yaml` | baseline run / distilled run (source of truth) |
 | `config_meshsup.yaml` | 192³ surface + mesh supervised fine-tune (§5) |
+| `config_pretrain.yaml`, `pretrain.py` | MRI-only synthetic-warp SSL pretraining; writes transferable velocity-network weights |
 | `model.py` | `AffineNet`, `UNet`, `BandLimitedHead`, `SegRegistrationNet`, `SpatialTransformer`, warm-start loader |
 | `losses.py` | Dice, CE, bending, Jacobian, displacement, λ terms, `vel_mse`, surface + mesh regularisers (§5); `SegRegistrationLoss` |
 | `get_data.py` | `SegDataset`: one-hot loading, nearest resize to 128³, optional `target_vel`, white SDF pair (§5) |
-| `train.py` | training loop, AMP, warm-up cosine LR, checkpoints, provenance |
+| `train.py` | supervised fine-tuning loop, AMP, warm-up cosine LR, checkpoints, provenance |
 | `inference.py` | single-subject inference; `setup_inference` is reused by every tool |
 | `convert_one_hot.py`, `convert_synthseg_one_hot.py`, `label_mapping.py` | data generation |
 | `utils/make_white_sdf.py` | signed-distance volumes to each white surface — the surface loss's target |

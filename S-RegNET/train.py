@@ -24,10 +24,11 @@ volumes (utils/make_white_sdf.py) — the deliverable's own metric, which voxel
 Dice on a 128³ grid cannot see. See config_meshsup.yaml.
 
 Mesh regularisers (optional, on top of the surface terms): non-zero
-`loss.mesh_edge` / `mesh_lap` / `mesh_normal` push the FULL template mesh
-every step and penalise edge-length, Laplacian and dihedral distortion in
-excess of the affine-aligned template's own — the per-subject refinement's
-three terms (bandlimit_opt/instance_opt_surface.py), amortised into the net.
+`loss.mesh_edge` / `mesh_lap` / `mesh_normal` / `mesh_area` push the FULL
+template mesh every step. The first three penalize edge-length, Laplacian and
+dihedral distortion in excess of the affine-aligned template's own; mesh_area
+adds a local oriented face-collapse/reversal barrier. None detects non-local
+self-intersections; validate those with `utils/evaluate_all.py --self_int`.
 See config_meshsup.yaml.
 
 Evaluation: Dice on warped template seg vs sample seg (the GT target),
@@ -59,8 +60,8 @@ from datetime import datetime
 from tqdm import tqdm
 
 from model import (SegRegistrationNet, SpatialTransformer,
-                   load_bandlimited_warm_start)
-from losses import (MESH_TERMS, SegRegistrationLoss, compute_dice_score,
+                   load_bandlimited_warm_start, load_ssl_warm_start)
+from losses import (MESH_ALL_TERMS, SegRegistrationLoss, compute_dice_score,
                     jacobian_det, mesh_structure, sample_sdf)
 from get_data import SegDataset
 from git_provenance import write_git_sha
@@ -520,7 +521,7 @@ def _load_surface_ctx(config, subject_verts_len, logger):
                         f"scored (medial wall dropped)")
 
     mesh = None
-    if any(config.loss_weights.get(k, 0.0) for k in MESH_TERMS):
+    if any(config.loss_weights.get(k, 0.0) for k in MESH_ALL_TERMS):
         # mm per normalized unit of the template grid, from the seg .npy's
         # .nii.gz sibling — utils/visualize_mesh.mm_per_norm, the refinement's
         # scale, duplicated so train.py does not import the eval stack.
@@ -872,7 +873,21 @@ def main():
         # weights_only=False: our checkpoints contain numpy scalars in metrics.
         checkpoint = torch.load(config.resume_from, map_location=device, weights_only=False)
         state_dict = checkpoint['model_state_dict']
-        if config.head == 'bandlimited' and 'unet.out_conv.weight' in state_dict:
+        if checkpoint.get('ssl_pretraining', False):
+            if not config.resume_weights_only:
+                raise ValueError(
+                    "MRI-SSL checkpoints require resume.weights_only: true "
+                    "(the pretraining optimizer and epoch are not fine-tuning state)")
+            if config.head != 'bandlimited':
+                raise ValueError(
+                    "MRI-SSL warm starts require model.head: bandlimited")
+            loaded = load_ssl_warm_start(model, state_dict)
+            logger.info(
+                f"MRI-SSL warm start: transferred {loaded} shared U-Net "
+                "tensors; affine and segmentation-specific lambda head "
+                "remain freshly initialized"
+            )
+        elif config.head == 'bandlimited' and 'unet.out_conv.weight' in state_dict:
             # Warm start, not a resume: the old 6-channel head is sliced into
             # the band-limited base branch, so the optimizer state and the
             # epoch counter of that run no longer apply.
@@ -951,7 +966,9 @@ def main():
                     logger.info(
                         f"  {tag} - Mesh: edge {c['mesh_edge']:.4f} "
                         f"| lap {c['mesh_lap']:.4f} mm | normal {c['mesh_normal']:.4f} "
-                        f"(unweighted excess over the affine-aligned template)"
+                        f"| area barrier {c['mesh_area']:.5f} "
+                        "(edge/Laplacian/normal are excess over the affine-aligned "
+                        "template; area is the local reference-area barrier)"
                     )
         ls = val_metrics['lambda_stats']
         logger.info(
