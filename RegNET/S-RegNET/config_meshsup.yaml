@@ -1,0 +1,235 @@
+# =============================================================================
+# Seg-only Registration Configuration — MESH-SUPERVISED 192³ FINE-TUNE
+# =============================================================================
+# Amortises the symM50 per-subject refinement into the
+# 192³ net: warm-starts res192_v1/20260910_130340/best_model.pth and adds to
+# its Dice/CE objective the two surface-distance directions (0.2 / 0.03, the
+# surface-loss run's weights) and the three mesh regularisers on the full pushed
+# template mesh (edge 1.3 / Laplacian 3.4 / normal 6.4, the refinement's
+# calibrated weights); displacement penalty off. 30 epochs, lr 5e-5.
+#
+# Everything not tagged MESHSUP: matches config.yaml except the
+# RES192:-tagged 192³ choices, which this run keeps. Evaluate BOTH
+# best_model.pth (val Dice) and best_surface.pth (val surface). Run:
+#   CUDA_VISIBLE_DEVICES=<n> python train.py --config config_meshsup.yaml
+
+# -----------------------------------------------------------------------------
+# Data Paths
+# -----------------------------------------------------------------------------
+data:
+  # Training and validation data lists (text files; one path per line, each
+  # pointing at the seg .npy of one subject — the dataset loader infers the
+  # subject directory from the file path).
+  train_txt: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/train.txt"
+  val_txt:   "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/val.txt"
+
+  # Template subject seg (used as moving image for every registration).
+  template_seg_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans/OASIS_OAS1_0406_MR1/seg4_white_onehot.npy"
+
+  # Template WM mesh, REPAIRED (see config.yaml for the provenance note). Now
+  # read by train.py too, not just the eval tools: its `verts_norm` are the
+  # points the template->subject surface term pushes and scores. MESHSUP: its
+  # `faces` build the edge / Laplacian / face-pair structure of the mesh terms.
+  template_wm_mesh_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/meshes/OASIS_OAS1_0406_MR1/repaired/template_wm_mesh_repaired.npz"
+
+  seg_filename: "seg4_white_onehot.npy"
+  input_seg_filename: "synthseg_white_onehot_v1.npy"
+
+  # RES192: no target_vel_filename. This is not a distillation run either —
+  # the supervision is the ordinary Dice/CE objective on the warm-started
+  # checkpoint, not a frozen teacher field, so nothing pins the affine space
+  # and the affine branch trains again (below).
+
+  # RES192: signed distance to each subject's white surface (float16, native
+  # 256³ grid, mm, negative inside, clamped ±10) and that surface's vertices in
+  # normalized coords, both written next to the subject's segs by
+  # utils/make_white_sdf.py. Read by BOTH loaders — MESHSUP: a gradient
+  # source again (loss.surface / surface_tail below), val surfaces are the
+  # held-out mesh number and drive best_surface.pth. A missing file is a
+  # generation bug, so the dataset raises rather than skipping the subject.
+  white_sdf_filename: "white_sdf_v1.npy"
+  white_surf_filename: "white_surf_v1.npz"
+
+  # SURFACE: the same volume for the template, for the subject->template
+  # direction of the symmetric term.
+  template_white_sdf_path: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/meshes/OASIS_OAS1_0406_MR1/repaired/template_white_sdf_v1.npy"
+
+  # SURFACE: fsaverage nomedialwall labels (ico7, lh+rh). The medial wall is an
+  # artificial cut, not anatomy, and must not be scored — it is 27,803 of the
+  # 327,684 vertices (8.5%). null would score every vertex.
+  cortex_labels_dir: "/shared/scratch/0/home/v_nishchay_nilabh/bandlimit_opt/fsaverage_labels"
+
+# -----------------------------------------------------------------------------
+# Output Configuration
+# -----------------------------------------------------------------------------
+output:
+  # MESHSUP: own run tree (_v2; _v1 is the earlier run from the mesh-sup branch).
+  base_dir: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/meshsup_v2"
+  checkpoint_subdir: "checkpoints"
+  log_subdir: "logs"
+  viz_subdir: "viz_output"
+
+# -----------------------------------------------------------------------------
+# Model Architecture
+# -----------------------------------------------------------------------------
+model:
+  target_size: [192, 192, 192]   # (D, H, W) — volume dims after resize
+                                 # RES192: 128 -> 192. Stored segs are native
+                                 # 256³; get_data resizes at load. Feasibility:
+                                 # 11.5 GiB peak fwd+bwd on a 3090 (256³ OOMs).
+  num_classes: 5                 # incl. background (channel 0)
+  seg_channels: 5
+
+  # RES192 (was SURFACE): same tied band-limited head as the distilled
+  # checkpoint we start from (must match, or the warm start is meaningless).
+  # lowpass_size is now DERIVED from target_size in model.py
+  # (SegRegistrationNet.__init__, 3/4 of the grid) instead of fixed at 96 —
+  # 144³ here. The tie matters more here than anywhere: flow_rv = exp(-v) is
+  # the exact inverse of flow_fw by construction, so the mesh push this run's
+  # monitor scores is the mesh push inference performs.
+  head: bandlimited
+
+# -----------------------------------------------------------------------------
+# Affine Pre-alignment
+# -----------------------------------------------------------------------------
+affine:
+  enabled: true
+  # SURFACE: 0.0 -> 0.01 (back to config.yaml's value). The distill run zeroed
+  # both because train.py freezes affine_net whenever target_vel_filename is
+  # set, which made the terms constants; here there are no distill targets, the
+  # affine branch trains, and it needs its regularizer back.
+  regularization_weight: 0.01
+  orthogonality_weight: 0.0
+
+# -----------------------------------------------------------------------------
+# Training Hyperparameters
+# -----------------------------------------------------------------------------
+training:
+  batch_size: 1
+  num_epochs: 30                 # MESHSUP: 40 -> 30. Warm start from the
+                                 # converged 192³ net with new loss terms; the
+                                 # refinement reached its knee in 50 steps, so
+                                 # 30 epochs (~3.5-4 h) is ample
+  num_workers: 0
+  pin_memory: true
+
+  learning_rate: 5.0e-5          # RES192 (was SURFACE): 1.0e-4 -> 5.0e-5,
+                                 # kept from the surface run. Halved because
+                                 # this is a warm start of an already-converged
+                                 # net onto a new grid resolution (128³ ->
+                                 # 192³, fresh Adam moments, see
+                                 # resume.weights_only) — a conservative LR
+                                 # avoids a disruptive first step
+  min_learning_rate: 1.0e-6
+  weight_decay: 1.0e-5
+
+  warmup_epochs: 3               # SURFACE: 5 -> 3; the warm start begins on the
+                                 # manifold and there are only 30 epochs
+
+  use_amp: true                  # the surface and mesh terms are computed in
+                                 # fp32 regardless (losses.surface_distance_loss,
+                                 # losses.mesh_regularizers, train._surface_batch)
+
+  save_every: 5                  # SURFACE: 10 -> 5, matching the shorter run
+  patience: 30                   # MESHSUP: patience = num_epochs disables
+                                 # early stopping — the surface / mesh terms
+                                 # trade val Dice (refinement: 0.882 -> 0.846)
+                                 # while the mesh metrics improve
+  max_grad_norm: 1.0
+
+# -----------------------------------------------------------------------------
+# Loss Function Weights
+# -----------------------------------------------------------------------------
+loss:
+  # Segmentation alignment — KEPT at the usual weights. They ground the net in
+  # the task, so the surface term cannot trade away overlap unopposed.
+  dice:          0.8
+  cross_entropy: 0.2
+  class_weights: [0.1, 1.0, 1.0, 5.0, 1.0]
+
+  # MESHSUP: 0.0 -> 0.2 / 0.03, the surface run's calibrated values (1x /
+  # 0.5x the weighted dice at the warm start). Each key is the SUM of both
+  # directions in losses.py: pushed template -> subject white SDF and subject
+  # GT white vertices -> template SDF (the refinement's reverse term; GT is
+  # fine in training).
+  surface:       0.2
+  surface_tail:  0.03
+
+  # MESHSUP: the refinement's three mesh regularisers on the full pushed
+  # template mesh, each as EXCESS over the affine-aligned template's own
+  # geometry (losses.mesh_regularizers). Weights are the refinement's
+  # calibration on this very checkpoint (each term = 0.2x a Dice/CE data term
+  # of ~0.8 at iteration 0: edge@0 ~0.12 -> 1.3, lap@0 ~0.047 mm -> 3.4,
+  # normal@0 ~0.025 -> 6.4); training's weighted Dice+CE term is comparable, so
+  # the magnitudes carry over unscaled.
+  mesh_edge:     1.3
+  mesh_lap:      3.4
+  mesh_normal:   6.4
+
+  # RES192 (was SURFACE): no vel_mse. See data.target_vel_filename above.
+
+  # Geometric regularization
+  bending:       0.02          # second-order smoothness
+  jacobian:      0.005         # as the distill run: the tied inverse exp(-v)
+                               # measures a raw jacobian ~1445 on this head at
+                               # 128³, so config.yaml's 0.15 would outweigh
+                               # dice ~500:1 and stall alignment. RES192: watch
+                               # val folding_pct every epoch — moving to 192³
+                               # changes the effective smoothness of the same
+                               # weight — and raise toward 0.05 if it climbs
+                               # above the distill baseline (~0.02%)
+  displacement:  0.0           # MESHSUP: 0.01 -> 0.0. Penalises sliding a
+                               # gyrus into place, which is exactly what the
+                               # surface terms ask for; the refinement dropped
+                               # it for the same reason
+
+  # Lambda-based adaptive regularization — KEPT.
+  lambda_smoothness: 0.05
+  lambda_prior:      0.05
+
+  # Affine regularization — mirrors the affine block above (train.py only fills
+  # these by setdefault, so an explicit value here wins).
+  affine_reg:    0.01
+  affine_ortho:  0.0
+
+# -----------------------------------------------------------------------------
+# Reproducibility
+# -----------------------------------------------------------------------------
+seed: 42
+
+# -----------------------------------------------------------------------------
+# Device Configuration
+# -----------------------------------------------------------------------------
+device:
+  # Always cuda:0 — the physical GPU is chosen with CUDA_VISIBLE_DEVICES on the
+  # launch line, so this file never has to be edited to move a run.
+  gpu: "cuda:0"
+  cudnn_benchmark: true
+
+# -----------------------------------------------------------------------------
+# Visualization Settings (used by inference / run_inference_all)
+# -----------------------------------------------------------------------------
+visualization:
+  num_samples: 30
+  detailed_samples: 10
+  seed: 42
+  class_names:
+    - "Background"
+    - "Cortex"
+    - "Other Brain"
+    - "White Surface Interior"
+    - "CSF"
+
+# -----------------------------------------------------------------------------
+# Resume Training
+# -----------------------------------------------------------------------------
+resume:
+  # MESHSUP: warm start from the 192³ run's best_model.pth (epoch 40, val Dice
+  # 0.787, pushed-mesh t2s 0.814 mm) — the checkpoint the refinement was
+  # calibrated and evaluated on. Same architecture and grid, so the weights
+  # load one-to-one.
+  checkpoint_path: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/res192_v1/20260910_130340/checkpoints/best_model.pth"
+  # MESHSUP: weights only — fresh optimizer, epoch counter back to 1, best
+  # Dice / surface reset. Five new loss terms make the old Adam moments and
+  # the old best-Dice bar meaningless.
+  weights_only: true

@@ -1,0 +1,7 @@
+# pack-refs with: peeled fully-peeled sorted 
+2a8bfe09ef2092853b2a0fb97b85366a380edc89 refs/remotes/origin/invertible-deform-SRegNET
+8e771703e0c7520c4ba5061d9bfec050d3361664 refs/remotes/origin/keyreg-diffeomorphic
+d6aa6a452d79bb45b6efd0d06a2d76bb89873ae8 refs/remotes/origin/main
+ced8b1344166a93f90c0eb84b6aa86412f625184 refs/remotes/origin/sregnet-distill
+18155d0721307a5f6c1c83dce8b732bf3c361198 refs/remotes/origin/sregnet-ssl
+84f7c6a639337939132a6409bf0f06a353a2a13b refs/remotes/origin/svf_test
