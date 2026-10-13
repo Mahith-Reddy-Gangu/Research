@@ -7,6 +7,9 @@ Loads:
 - Optionally a second sample segmentation used as the network input
   instead of the target (the deployment condition: SynthSeg in, GT out)
 
+`PairwiseSegDataset` is the same thing with the moving volume drawn at
+random from the training subjects instead of always being the template.
+
 Resizes to a fixed target_size using mode='nearest' so the seg stays
 strictly one-hot. No spatial augmentation here — misalignment between
 template and sample is the registration signal.
@@ -302,6 +305,72 @@ class SegDataset(Dataset):
         if vel is None:
             return torch.zeros(3, *self.target_size), False
         return vel.float(), True
+
+
+class PairwiseSegDataset(SegDataset):
+    """
+    Pairwise variant: the moving volume is a random training subject instead
+    of always the template. Same dict keys as SegDataset, so the train step is
+    unchanged — only what lands in `template_seg` differs.
+
+    - TARGET (fixed) subject j is drawn from the current target pool: its
+      SynthSeg seg is the net input and its GT the supervision, exactly as in
+      SegDataset.
+    - MOVING is the template with probability `template_prob`, else the clean
+      GT of a random other subject i != j drawn from ALL training subjects. It
+      is always clean GT: at inference the moving volume is the clean template.
+    - An "epoch" is `pairs_per_epoch` random draws, not an enumeration of all
+      n*(n-1) pairs, so scheduler, val and save cadence keep their meaning.
+    - Target pool (curriculum): `pool_schedule` is a list of
+      [start_epoch, pool_size]; the pool is the first pool_size subjects of a
+      `pool_seed`-fixed permutation, so pools are nested and reproducible.
+      pool_size null = all. Empty schedule = every subject from epoch 1.
+      train.py calls set_epoch() at the start of each epoch.
+    """
+
+    def __init__(self, data_list_file, template_seg_path,
+                 pairs_per_epoch=330, template_prob=0.25,
+                 pool_schedule=None, pool_seed=0, **kwargs):
+        super().__init__(data_list_file, template_seg_path, **kwargs)
+        self.pairs_per_epoch = pairs_per_epoch
+        self.template_prob = template_prob
+        self.pool_schedule = sorted(pool_schedule or [], key=lambda r: r[0])
+
+        # Warping the template onto itself is not a data point, so the
+        # template's own subject is never a target.
+        template_dir = os.path.normpath(os.path.dirname(template_seg_path))
+        targets = [i for i, d in enumerate(self.subject_dirs)
+                   if os.path.normpath(d) != template_dir]
+        g = torch.Generator().manual_seed(pool_seed)
+        self.target_order = [targets[k] for k in torch.randperm(len(targets), generator=g)]
+        self.pool = self.target_order
+
+    def set_epoch(self, epoch):
+        """Set the target pool for `epoch`; returns the pool size."""
+        n = len(self.target_order)
+        for start, size in self.pool_schedule:
+            if epoch >= start:
+                n = len(self.target_order) if size is None else min(size, len(self.target_order))
+        self.pool = self.target_order[:n]
+        return n
+
+    def __len__(self):
+        return self.pairs_per_epoch
+
+    def __getitem__(self, idx):
+        """`idx` is ignored — each call is an independent random draw from the
+        torch global RNG, so the run is reproducible under train.py's seed."""
+        j = self.pool[int(torch.randint(len(self.pool), (1,)))]
+        item = super().__getitem__(j)
+        if torch.rand(1).item() >= self.template_prob:
+            # Uniform over every subject but j: draw from n-1 and step past j.
+            i = int(torch.randint(len(self.subject_dirs) - 1, (1,)))
+            i += i >= j
+            item['template_seg'] = (
+                self._seg_cache[i].float() if self._seg_cache is not None
+                else self._load_seg(os.path.join(self.subject_dirs[i], self.seg_filename),
+                                    self.target_size))
+        return item
 
 
 # =============================================================================

@@ -30,6 +30,12 @@ excess of the affine-aligned template's own — the per-subject refinement's
 three terms (bandlimit_opt/instance_opt_surface.py), amortised into the net.
 See config_meshsup.yaml.
 
+Pairwise (optional): set `data.pairwise.enabled` and the moving volume is a
+random training subject's clean GT (the template with prob template_prob), with
+targets drawn from a pool that can grow over epoch (target_pool_schedule) —
+see config_pw_flat.yaml. Validation stays
+template -> subject, so model selection never leaves the deployment condition.
+
 Evaluation: Dice on warped template seg vs sample seg (the GT target),
 plus per-voxel folding diagnostics via the Jacobian determinant.
 
@@ -62,7 +68,7 @@ from model import (SegRegistrationNet, SpatialTransformer,
                    load_bandlimited_warm_start)
 from losses import (MESH_TERMS, SegRegistrationLoss, compute_dice_score,
                     jacobian_det, mesh_structure, sample_sdf)
-from get_data import SegDataset
+from get_data import SegDataset, PairwiseSegDataset
 from git_provenance import write_git_sha
 
 
@@ -108,6 +114,14 @@ class Config:
         # Medial-wall masks for the surface terms (optional; null = score
         # every vertex, including the artificial inter-hemispheric cut).
         self.cortex_labels_dir = cfg['data'].get('cortex_labels_dir') or None
+        # Pairwise training (train loader only): random moving subject, targets
+        # from a pool that grows per target_pool_schedule.
+        pw = cfg['data'].get('pairwise') or {}
+        self.pairwise = pw.get('enabled', False)
+        self.pairs_per_epoch = pw.get('pairs_per_epoch', 330)
+        self.template_prob = pw.get('template_prob', 0.25)
+        self.target_pool_schedule = pw.get('target_pool_schedule') or []
+        self.pool_seed = pw.get('pool_seed', 0)
 
         # Output
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -766,6 +780,15 @@ def main():
     if config.white_sdf_filename:
         logger.info(f"  surface target : {config.white_sdf_filename} + "
                     f"{config.white_surf_filename}  (train and val)")
+    if config.pairwise:
+        # Both are defined against the template only: distillation targets are
+        # template->subject velocities, the surface terms push the template mesh.
+        if config.target_vel_filename or config.white_sdf_filename:
+            raise ValueError("data.pairwise is incompatible with "
+                             "target_vel_filename and white_sdf_filename")
+        logger.info(f"  pairwise       : ON  ({config.pairs_per_epoch} pairs/epoch, "
+                    f"template as moving p={config.template_prob}, pool schedule "
+                    f"{config.target_pool_schedule or 'flat'}, pool_seed {config.pool_seed})")
 
     # Same discipline as SegDataset's per-subject _require: a typo in one of
     # the template-side paths must not cost a full ~28 GB preload first.
@@ -778,15 +801,28 @@ def main():
 
     # The distillation targets exist for training subjects only — val is
     # deliberately target-free so its Dice stays an honest held-out number.
-    train_dataset = SegDataset(
-        config.train_txt, config.template_seg_path,
-        target_size=config.target_size,
-        seg_filename=config.seg_filename,
-        input_seg_filename=config.input_seg_filename,
-        target_vel_filename=config.target_vel_filename,
-        white_sdf_filename=config.white_sdf_filename,
-        white_surf_filename=config.white_surf_filename,
-    )
+    if config.pairwise:
+        train_dataset = PairwiseSegDataset(
+            config.train_txt, config.template_seg_path,
+            pairs_per_epoch=config.pairs_per_epoch,
+            template_prob=config.template_prob,
+            pool_schedule=config.target_pool_schedule,
+            pool_seed=config.pool_seed,
+            target_size=config.target_size,
+            seg_filename=config.seg_filename,
+            input_seg_filename=config.input_seg_filename,
+        )
+    else:
+        train_dataset = SegDataset(
+            config.train_txt, config.template_seg_path,
+            target_size=config.target_size,
+            seg_filename=config.seg_filename,
+            input_seg_filename=config.input_seg_filename,
+            target_vel_filename=config.target_vel_filename,
+            white_sdf_filename=config.white_sdf_filename,
+            white_surf_filename=config.white_surf_filename,
+        )
+    # Val is never pairwise: model selection stays on template -> subject.
     val_dataset = SegDataset(
         config.val_txt, config.template_seg_path,
         target_size=config.target_size,
@@ -915,6 +951,7 @@ def main():
         epoch_start = time.time()
 
         current_lr = scheduler.step(epoch - 1)
+        pool = train_dataset.set_epoch(epoch) if config.pairwise else None
 
         train_metrics = train_epoch(
             model, stn, train_loader, loss_fn, optimizer, scaler, device, epoch,
@@ -929,7 +966,8 @@ def main():
         logger.info("-" * 70)
         mem = (f" | Peak mem: {torch.cuda.max_memory_allocated(device) / 2**30:.1f} GiB"
                if 'cuda' in config.device else "")
-        logger.info(f"Epoch {epoch}/{config.num_epochs} | Time: {epoch_time:.1f}s | LR: {current_lr:.2e}{mem}")
+        pool_str = f" | Pool: {pool} targets" if pool is not None else ""
+        logger.info(f"Epoch {epoch}/{config.num_epochs} | Time: {epoch_time:.1f}s | LR: {current_lr:.2e}{mem}{pool_str}")
         logger.info(f"  Train - Loss: {train_metrics['loss']:.5f} | Dice: {train_metrics['dice']:.4f}")
         logger.info(f"  Val   - Loss: {val_metrics['loss']:.5f} | Dice: {val_metrics['dice']:.4f}")
         logger.info(

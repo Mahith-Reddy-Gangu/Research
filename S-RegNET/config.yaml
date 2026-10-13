@@ -43,6 +43,15 @@ data:
   seg_filename: "seg4_white_onehot.npy"
   input_seg_filename: "synthseg_white_onehot_v1.npy"
 
+  # PAIRWISE (off): moving = clean GT of a random other training subject
+  # instead of the template. See config_pw_flat.yaml for an enabled example.
+  pairwise:
+    enabled: false
+    pairs_per_epoch: 330
+    template_prob: 0.25
+    target_pool_schedule: []   # [[start_epoch, pool_size], ...]; pool_size null = all; [] = flat
+    pool_seed: 0
+
   # Surface + mesh supervision (off here; see config_meshsup.yaml). The pair
   # is written next to each subject's segs by utils/make_white_sdf.py: the
   # signed distance (mm, float16, native 256³ grid) to that subject's white
