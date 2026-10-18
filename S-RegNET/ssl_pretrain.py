@@ -129,10 +129,25 @@ class SSLConfig:
         # during supervised fine-tuning.
         self.freeze_affine = ssl_cfg.get('freeze_affine', True)
 
-        # Device
-        self.device = (cfg['device']['gpu']
-                       if torch.cuda.is_available() else "cpu")
+        # Device — validate the configured GPU ordinal actually exists.
+        # CUDA_VISIBLE_DEVICES remaps physical GPUs: e.g. setting it to "7"
+        # makes that GPU appear as cuda:0 to PyTorch.  A config that says
+        # cuda:1 will crash with "invalid device ordinal" in that case.
         self.cudnn_benchmark = cfg['device'].get('cudnn_benchmark', True)
+        requested = cfg['device']['gpu']
+        if torch.cuda.is_available():
+            n_gpus = torch.cuda.device_count()
+            # Extract ordinal from e.g. "cuda:1"
+            try:
+                ordinal = int(requested.split(':')[1]) if ':' in requested else 0
+            except (ValueError, IndexError):
+                ordinal = 0
+            if ordinal >= n_gpus:
+                self.device = "cuda:0"
+            else:
+                self.device = requested
+        else:
+            self.device = "cpu"
 
         # Resume (for continuing a broken SSL run, NOT supervised→SSL)
         resume_cfg = cfg.get('resume', {})
