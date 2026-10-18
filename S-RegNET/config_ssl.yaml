@@ -1,0 +1,173 @@
+# =============================================================================
+# Self-Supervised Pretraining Configuration
+# =============================================================================
+# Equivariant warp regression: for each subject seg S, generate a random
+# synthetic deformation φ (with known velocity v), create S' = S ∘ φ, and
+# train S-RegNET to recover v from (S, S').
+#
+# Primary supervision: velocity_mse_loss(v_pred, v_synth) — the known
+# transformation parameters (per Prof. Zeng's feedback).
+#
+# After pretraining, fine-tune on labelled data by adding to config.yaml:
+#     resume:
+#       checkpoint_path: "<ssl_run>/checkpoints/best_model.pth"
+#       weights_only: true
+#
+# Run:
+#     python ssl_pretrain.py                          # default config
+#     python ssl_pretrain.py --config config_ssl.yaml
+
+# -----------------------------------------------------------------------------
+# Data Paths
+# -----------------------------------------------------------------------------
+# Same subjects as supervised training.  SSL uses only the seg files; no
+# GT labels, target velocities, SDFs, or surface meshes are needed.
+data:
+  train_txt: "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/train.txt"
+  val_txt:   "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/val.txt"
+
+  # Which seg to use as the network input during SSL.
+  # For maximum transfer, use the SAME seg the supervised run will see
+  # as input — so the pretrained features are directly relevant.
+  #   seg4_white_onehot.npy          = GT seg (clean, all subjects)
+  #   synthseg_white_onehot_v1.npy   = SynthSeg-derived (deployment cond.)
+  seg_filename: "synthseg_white_onehot_v1.npy"
+
+# -----------------------------------------------------------------------------
+# Output
+# -----------------------------------------------------------------------------
+output:
+  base_dir: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/ssl_pretrain"
+  checkpoint_subdir: "checkpoints"
+  log_subdir: "logs"
+
+# -----------------------------------------------------------------------------
+# Model Architecture
+# -----------------------------------------------------------------------------
+# MUST match the supervised config.yaml EXACTLY — target_size, num_classes,
+# seg_channels, head, lowpass_size — otherwise the pretrained weights
+# cannot be loaded via resume.weights_only in train.py.
+model:
+  target_size: [128, 128, 128]
+  num_classes: 5
+  seg_channels: 5
+  # head / lowpass_size: omitted → defaults ('default' / 3/4 of grid),
+  # matching the supervised config.  Uncomment if the supervised config
+  # sets them explicitly.
+  # head: bandlimited
+  # lowpass_size: 96
+
+# -----------------------------------------------------------------------------
+# Affine Pre-alignment
+# -----------------------------------------------------------------------------
+# Must match the supervised config.  The affine branch is FROZEN during
+# SSL (see ssl.freeze_affine below) so the velocity regression target is
+# exact; it unfreezes automatically during supervised fine-tuning.
+affine:
+  enabled: true
+  regularization_weight: 0.01
+  orthogonality_weight: 0.0
+
+# -----------------------------------------------------------------------------
+# Training Hyperparameters
+# -----------------------------------------------------------------------------
+training:
+  batch_size: 1
+  num_epochs: 100            # SSL converges faster than supervised
+  num_workers: 0
+  pin_memory: true
+
+  learning_rate: 2.0e-4      # slightly higher than supervised (1e-4):
+                              # SSL targets are cleaner (known velocity)
+  min_learning_rate: 1.0e-6
+  weight_decay: 1.0e-5
+  warmup_epochs: 10
+
+  use_amp: true
+
+  save_every: 10
+  patience: 30               # shorter patience — SSL loss is less noisy
+  max_grad_norm: 1.0
+
+# -----------------------------------------------------------------------------
+# SSL-Specific Parameters
+# -----------------------------------------------------------------------------
+ssl:
+  # Coarse-grid sizes for the random velocity field.  One is chosen at
+  # random per step, giving the network multi-frequency diversity.
+  #   16 → minimum wavelength 16 vox (very smooth, large-scale warps)
+  #   24 → minimum wavelength ~11 vox (medium)
+  #   32 → minimum wavelength  8 vox (finer detail)
+  # All are smooth enough to produce strictly diffeomorphic warps.
+  coarse_sizes: [16, 24, 32]
+
+  # Standard deviation range of the coarse-grid Gaussian coefficients
+  # (in normalized grid coords [-1, 1]).
+  #   σ = 0.02 → ~1.3 voxel displacement at 128³ (gentle)
+  #   σ = 0.05 → ~3.2 voxel displacement at 128³ (medium)
+  #   σ = 0.08 → ~5.1 voxel displacement at 128³ (moderate)
+  # Calibrated to the range of real OASIS inter-subject variation.
+  magnitude_range: [0.02, 0.08]
+
+  # Freeze the affine branch during SSL.  Synthetic warps have no affine
+  # component, so the "correct" affine is identity (the init value).
+  # Freezing ensures the velocity MSE is exact: v_pred should match
+  # v_synth in the SAME coordinate space, without any affine-compensation
+  # shift.  The affine net is small and converges in the first few epochs
+  # of supervised fine-tuning.  Set to false to also pretrain the affine
+  # branch (the velocity MSE acquires a small O(||A−I||²) error).
+  freeze_affine: true
+
+# -----------------------------------------------------------------------------
+# Loss Function Weights
+# -----------------------------------------------------------------------------
+# velocity MSE is the PRIMARY supervision signal — the known-parameter
+# regression.  Dice/CE are auxiliary reconstruction checks.  Geometric
+# regularisers keep the predicted warps smooth and diffeomorphic.
+loss:
+  # Known-parameter regression (PRIMARY SSL signal)
+  vel_mse:           20.0
+
+  # Reconstruction quality (auxiliary)
+  dice:              0.3
+  cross_entropy:     0.1
+  class_weights:     [0.1, 1.0, 1.0, 5.0, 1.0]
+
+  # Surface terms OFF during SSL (no per-subject SDFs needed)
+  surface:           0.0
+  surface_tail:      0.0
+  mesh_edge:         0.0
+  mesh_lap:          0.0
+  mesh_normal:       0.0
+
+  # Geometric regularization — same weights as supervised training
+  bending:           0.02
+  jacobian:          0.15
+  displacement:      0.01
+
+  # Lambda-adaptive regularization
+  lambda_smoothness: 0.05
+  lambda_prior:      0.05
+
+  # Affine regularization (keeps affine near identity during SSL;
+  # no gradient when freeze_affine: true, but the loss is still logged)
+  affine_reg:        0.01
+  affine_ortho:      0.0
+
+# -----------------------------------------------------------------------------
+# Reproducibility
+# -----------------------------------------------------------------------------
+seed: 42
+
+# -----------------------------------------------------------------------------
+# Device Configuration
+# -----------------------------------------------------------------------------
+device:
+  gpu: "cuda:1"
+  cudnn_benchmark: true
+
+# -----------------------------------------------------------------------------
+# Resume (for continuing a broken SSL run, NOT supervised→SSL)
+# -----------------------------------------------------------------------------
+resume:
+  checkpoint_path: null
