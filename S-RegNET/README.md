@@ -43,7 +43,11 @@ Rules that will save you a day:
   home breaks git and the file sync.
 - **Commit before a real run.** Every script stamps `GIT_SHA.txt` into its
   output dir and flags a dirty tree. A dirty run cannot be reproduced.
-- `nvidia-smi` first; the box is shared. Pass `--device cuda:N` explicitly.
+- `nvidia-smi` first; the box is shared. Training selects its GPU from
+  `device.gpu` in the config; CUDA indices are logical indices after
+  `CUDA_VISIBLE_DEVICES` is applied. `train.py` validates the index at startup,
+  falling back to the first visible GPU (or CPU when CUDA is unavailable) with
+  a warning instead of failing later during model initialization.
 
 ## 2. Data
 
@@ -87,7 +91,7 @@ point at it.
 
 ## 3. Run the shared model
 
-Checkpoints (`RUNS=/shared/scratch/0/home/v_nishchay_nilabh/training_results`):
+Checkpoints (`RUNS=/shared/scratch/0/home/v_mahith_reddy/training_results`):
 
 | name | path | head |
 |---|---|---|

@@ -81,6 +81,38 @@ def load_yaml_config(config_path):
         return yaml.safe_load(f)
 
 
+def _resolve_training_device(requested_device):
+    device = torch.device(requested_device)
+    if device.type != 'cuda':
+        return str(device), None
+
+    if not torch.cuda.is_available():
+        return "cpu", (
+            f"Configured device {device}, but CUDA is not available; "
+            "falling back to CPU."
+        )
+
+    device_count = torch.cuda.device_count()
+    if device_count == 0:
+        return "cpu", (
+            f"Configured device {device}, but CUDA reports no visible devices; "
+            "falling back to CPU."
+        )
+
+    device_index = device.index
+    if device_index is None:
+        device_index = torch.cuda.current_device()
+
+    if device_index < 0 or device_index >= device_count:
+        fallback_device = "cuda:0"
+        return fallback_device, (
+            f"Configured device {device} is outside the {device_count} visible "
+            f"CUDA device(s); falling back to {fallback_device}."
+        )
+
+    return f"cuda:{device_index}", None
+
+
 class Config:
     """Training configuration. Loads from config.yaml by default."""
 
@@ -741,6 +773,8 @@ def main():
     args = parser.parse_args()
 
     config = Config(args.config)
+    requested_device = config.device
+    config.device, device_warning = _resolve_training_device(requested_device)
 
     # Reproducibility
     torch.manual_seed(config.seed)
@@ -759,13 +793,15 @@ def main():
     logger.info("=" * 70)
     logger.info(f"Output directory: {config.output_dir}")
     logger.info(f"Device: {config.device}")
+    if device_warning:
+        logger.warning(device_warning)
 
     write_git_sha(config.output_dir, logger)
     config.save(os.path.join(config.output_dir, "config.json"))
 
     device = torch.device(config.device)
     if 'cuda' in config.device:
-        logger.info(f"GPU: {torch.cuda.get_device_name()}")
+        logger.info(f"GPU: {torch.cuda.get_device_name(device)}")
 
     # ==========================================================================
     # Data Loading

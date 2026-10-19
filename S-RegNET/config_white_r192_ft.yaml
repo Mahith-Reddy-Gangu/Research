@@ -35,7 +35,7 @@ data:
 # Output Configuration
 # -----------------------------------------------------------------------------
 output:
-  base_dir: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/white_r192_ft"
+  base_dir: "/shared/scratch/0/home/v_mahith_reddy/training_results/white_r192_ft"
   checkpoint_subdir: "checkpoints"
   log_subdir: "logs"
   viz_subdir: "viz_output"

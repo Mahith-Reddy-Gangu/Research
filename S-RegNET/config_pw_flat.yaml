@@ -78,7 +78,7 @@ data:
 output:
   # Runs land in <base_dir>/<YYYYMMDD_HHMMSS>/. Own this path — the previous
   # value pointed at v_mahith_reddy's scratch.
-  base_dir: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/pw_flat"
+  base_dir: "/shared/scratch/0/home/v_mahith_reddy/training_results/pw_flat"
   checkpoint_subdir: "checkpoints"
   log_subdir: "logs"
   viz_subdir: "viz_output"

@@ -37,7 +37,7 @@ data:
 # Output
 # -----------------------------------------------------------------------------
 output:
-  base_dir: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/ssl_pretrain"
+  base_dir: "/shared/scratch/0/home/v_mahith_reddy/training_results/ssl_pretrain"
   checkpoint_subdir: "checkpoints"
   log_subdir: "logs"
 

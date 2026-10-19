@@ -72,7 +72,7 @@ data:
 output:
   # Runs land in <base_dir>/<YYYYMMDD_HHMMSS>/. Own this path — the previous
   # value pointed at v_mahith_reddy's scratch.
-  base_dir: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/synthseg_input"
+  base_dir: "/shared/scratch/0/home/v_mahith_reddy/training_results/synthseg_input"
   checkpoint_subdir: "checkpoints"
   log_subdir: "logs"
   viz_subdir: "viz_output"
@@ -165,7 +165,7 @@ seed: 42
 # Device Configuration
 # -----------------------------------------------------------------------------
 device:
-  gpu: "cuda:1"
+  gpu: "cuda:0"
   cudnn_benchmark: true
 
 # -----------------------------------------------------------------------------
@@ -186,7 +186,7 @@ visualization:
 # Resume Training
 # -----------------------------------------------------------------------------
 resume:
-  checkpoint_path: null
+  checkpoint_path: "/shared/scratch/0/home/v_mahith_reddy/training_results/ssl_pretrain/20261018_185202/checkpoints/best_model.pth"
   # Weights only — fresh optimizer, epoch counter back to 1, best dice /
   # surface reset. The right mode when the loss configuration changes.
-  weights_only: false
+  weights_only: true

@@ -64,7 +64,7 @@ data:
 # -----------------------------------------------------------------------------
 output:
   # MESHSUP: own run tree (_v2; _v1 is the earlier run from the mesh-sup branch).
-  base_dir: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/meshsup_v2"
+  base_dir: "/shared/scratch/0/home/v_mahith_reddy/training_results/meshsup_v2"
   checkpoint_subdir: "checkpoints"
   log_subdir: "logs"
   viz_subdir: "viz_output"

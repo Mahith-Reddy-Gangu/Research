@@ -44,7 +44,7 @@ data:
 output:
   # Own run tree: the distilled net is a different architecture from the runs
   # under synthseg_input/ and must not be mistaken for one of them.
-  base_dir: "/shared/scratch/0/home/v_nishchay_nilabh/training_results/distill_v1"
+  base_dir: "/shared/scratch/0/home/v_mahith_reddy/training_results/distill_v1"
   checkpoint_subdir: "checkpoints"
   log_subdir: "logs"
   viz_subdir: "viz_output"

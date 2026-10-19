@@ -53,8 +53,10 @@ CHECKPOINT = "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/training_seg_a
 OASIS_SCANS_DIR = "/shared/scratch/0/home/v_nishchay_nilabh/oasis_data/scans"
 SYNTHSEG_DIR    = "/shared/home/v_nishchay_nilabh/shared_scratch/oasis_data/anna_data/oasis_dataset/oasis_synthseg_output/output"
 
-# Outputs land next to the checkpoint, under .../<TIMESTAMP>/compare_synthseg_vs_gt_results/
-OUTPUT_DIR = Path(CHECKPOINT).parent.parent / "compare_synthseg_vs_gt_results"
+# Keep this run's outputs under the current user's scratch space.
+OUTPUT_DIR = Path(
+    "/shared/scratch/0/home/v_mahith_reddy/training_results/"
+    "compare_synthseg_vs_gt_results")
 
 # Subject IDs come from val.txt (one absolute path to seg4_onehot.npy per line,
 # in shuffled order — preserved here). Parse the subject from the path.
