@@ -107,7 +107,8 @@ ssl:
   #   σ = 0.05 → ~3.2 voxel displacement at 128³ (medium)
   #   σ = 0.08 → ~5.1 voxel displacement at 128³ (moderate)
   # Calibrated to the range of real OASIS inter-subject variation.
-  magnitude_range: [0.02, 0.08]
+  # Number of distinct synthetic warps per subject (reused every epoch)
+  num_warps: 1000
 
   # Freeze the affine branch during SSL.  Synthetic warps have no affine
   # component, so the "correct" affine is identity (the init value).
@@ -129,8 +130,8 @@ loss:
   vel_mse:           20.0
 
   # Reconstruction quality (auxiliary)
-  dice:              0.3
-  cross_entropy:     0.1
+  dice:              0.5
+  cross_entropy:     0.2
   class_weights:     [0.1, 1.0, 1.0, 5.0, 1.0]
 
   # Surface terms OFF during SSL (no per-subject SDFs needed)

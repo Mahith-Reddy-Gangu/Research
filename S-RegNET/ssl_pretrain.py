@@ -122,6 +122,7 @@ class SSLConfig:
         self.coarse_sizes = tuple(ssl_cfg.get('coarse_sizes', [16, 24, 32]))
         self.magnitude_range = tuple(
             ssl_cfg.get('magnitude_range', [0.02, 0.08]))
+        self.num_warps = ssl_cfg.get('num_warps', 8)
         # Freeze the affine branch during SSL so the velocity MSE target
         # is exact: synthetic warps have no affine component, so the UNet
         # velocity should match v_synth without any affine compensation.
@@ -194,7 +195,7 @@ class SSLSegDataset(Dataset):
     """
 
     def __init__(self, data_list_file, target_size, seg_filename,
-                 preload=True):
+                 preload=True, num_warps=8):
         """
         Args:
             data_list_file: text file, one path per line; each points at a
@@ -209,7 +210,7 @@ class SSLSegDataset(Dataset):
                                  f.read().splitlines() if p.strip()]
         self.target_size = target_size
         self.seg_filename = seg_filename
-        self._cache = None
+        self.num_warps = num_warps
 
         # Fail fast: missing seg files.
         missing = [d for d in self.subject_dirs
@@ -248,13 +249,17 @@ class SSLSegDataset(Dataset):
         print(f"Preloading complete. RAM cached {n} seg volumes.")
 
     def __len__(self):
-        return len(self.subject_dirs)
+        return len(self.subject_dirs) * self.num_warps
 
     def __getitem__(self, idx):
+        subject_idx = idx // self.num_warps
         if self._cache is not None:
-            return {'seg': self._cache[idx].float()}
-        path = os.path.join(self.subject_dirs[idx], self.seg_filename)
-        return {'seg': self._load_seg(path)}
+            seg = self._cache[subject_idx].float()
+        else:
+            path = os.path.join(self.subject_dirs[subject_idx],
+                                self.seg_filename)
+            seg = self._load_seg(path)
+        return {'seg': seg, 'idx': idx}
 
 
 # =============================================================================
@@ -290,16 +295,23 @@ def ssl_train_epoch(model, stn, dataloader, loss_fn, optimizer, scaler,
     for batch in pbar:
         seg = batch['seg'].to(device)                   # (B, 5, D, H, W)
         B = seg.shape[0]
+        base_seed = 12345
+        v_list = []
+        fw_list = []
+        rv_list = []
+        for i in range(B):
+            seed = base_seed + int(batch['idx'][i].item())
+            v, ffw, frv = generate_synthetic_warp(
+                1, config.target_size, stn, device,
+                coarse_sizes=config.coarse_sizes,
+                magnitude_range=config.magnitude_range,
+                seed=seed)
+            v_list.append(v)
+            fw_list.append(ffw)
+            rv_list.append(frv)
+        v_synth = torch.cat(v_list, dim=0)
+        flow_synth_fw = torch.cat(fw_list, dim=0)
 
-        # ---- Synthetic warp (no grad: fixed target) ----
-        v_synth, flow_synth_fw, _ = generate_synthetic_warp(
-            B, config.target_size, stn, device,
-            coarse_sizes=config.coarse_sizes,
-            magnitude_range=config.magnitude_range)
-
-        # Create synthetic target with nearest interpolation to preserve
-        # the one-hot property — matches the role of sample_seg in
-        # supervised training.
         with torch.no_grad():
             seg_warped = warp_seg_nearest(seg, flow_synth_fw, stn)
 
@@ -488,9 +500,11 @@ def main():
     logger.info(f"  seg: {config.seg_filename}")
 
     train_dataset = SSLSegDataset(
-        config.train_txt, config.target_size, config.seg_filename)
+        config.train_txt, config.target_size, config.seg_filename,
+        num_warps=config.num_warps)
     val_dataset = SSLSegDataset(
-        config.val_txt, config.target_size, config.seg_filename)
+        config.val_txt, config.target_size, config.seg_filename,
+        num_warps=config.num_warps)
 
     train_loader = DataLoader(
         train_dataset, batch_size=config.batch_size, shuffle=True,

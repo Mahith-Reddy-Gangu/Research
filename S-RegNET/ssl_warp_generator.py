@@ -27,8 +27,22 @@ import torch.nn.functional as F
 
 
 def generate_synthetic_velocity(batch_size, target_size, device,
-                                coarse_sizes=(16, 24, 32),
-                                magnitude_range=(0.02, 0.08)):
+                                 coarse_sizes=(16, 24, 32),
+                                 magnitude_range=(0.02, 0.08),
+                                 seed=None):
+    if seed is not None:
+        g = torch.Generator().manual_seed(int(seed))
+    else:
+        g = None
+    d = coarse_sizes[torch.randint(len(coarse_sizes), (1,), generator=g).item()]
+    lo, hi = magnitude_range
+    sigma = lo + (hi - lo) * torch.rand(1, generator=g).item()
+    vel_coarse = torch.randn(batch_size, 3, d, d, d, generator=g) * sigma
+    vel_coarse = vel_coarse.to(device)
+    vel = F.interpolate(vel_coarse, size=target_size,
+                         mode='trilinear', align_corners=False)
+    vel = vel - vel.mean(dim=(2, 3, 4), keepdim=True)
+    return vel
     """Generate a random band-limited velocity field.
 
     Args:
@@ -102,8 +116,16 @@ def integrate_velocity(vel, stn, n_steps=7):
 
 @torch.no_grad()
 def generate_synthetic_warp(batch_size, target_size, stn, device,
-                            coarse_sizes=(16, 24, 32),
-                            magnitude_range=(0.02, 0.08)):
+                             coarse_sizes=(16, 24, 32),
+                             magnitude_range=(0.02, 0.08),
+                             seed=None):
+    vel = generate_synthetic_velocity(batch_size, target_size, device,
+                                       coarse_sizes=coarse_sizes,
+                                       magnitude_range=magnitude_range,
+                                       seed=seed)
+    flow_fw = integrate_velocity(vel, stn)
+    flow_rv = integrate_velocity(-vel, stn)
+    return vel, flow_fw, flow_rv
     """Generate a complete synthetic warp with known ground-truth velocity.
 
     The returned velocity is the supervision target for
